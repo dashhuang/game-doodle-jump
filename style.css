@@ -10,7 +10,8 @@ body {
 }
 
 canvas {
-    background-color: #e0ffff; /* Keep canvas background */
+    /* background-color: #e0ffff; */ /* Removed solid color */
+    background: linear-gradient(to bottom, #87CEEB, #ADD8E6); /* Sky blue gradient */
     display: block; /* Remove extra space below canvas */
     width: 100vw; /* Fill viewport width */
     height: 100vh; /* Fill viewport height */

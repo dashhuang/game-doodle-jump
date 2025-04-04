@@ -21,6 +21,18 @@ let gameover = false;
 let difficulty = 0; // 难度值，随时间/高度增加
 let previousDifficulty = 0; // 用于跟踪难度变化
 
+// 云朵数组和参数
+let clouds = [];
+const initialClouds = 5;
+const cloudMinYSpacing = 200;
+const cloudMaxYSpacing = 400;
+const cloudMinWidth = 60;
+const cloudMaxWidth = 120;
+const cloudMinHeight = 20;
+const cloudMaxHeight = 40;
+const cloudMinSpeed = 0.1;
+const cloudMaxSpeed = 0.5;
+
 // 玩家对象 (Use logical dimensions)
 const player = {
     x: logicalWidth / 2 - 25,
@@ -94,6 +106,7 @@ function init() {
     player.isJumping = false;
     player.onGround = false;
     platforms = [];
+    clouds = [];
 
     // Create initial platforms within logical coordinate space
     for (let i = 0; i < initialPlatforms; i++) {
@@ -103,6 +116,12 @@ function init() {
     platforms[0].x = player.x + (player.width - platformWidth) / 2;
     platforms[0].y = player.y + player.height;
     platforms[0].type = 'normal';
+
+    // 创建初始云朵 (分布在初始可见区域)
+    for (let i = 0; i < initialClouds; i++) {
+        let yPos = logicalHeight - (Math.random() * logicalHeight * 1.5); // Spread initial clouds higher
+        createCloud(Math.random() * logicalWidth, yPos);
+    }
 
     keys = {};
     touchStartX = null;
@@ -155,6 +174,56 @@ function createPlatform(x, y, forcedType = null) {
         platform.direction = Math.random() < 0.5 ? 1 : -1;
     }
     platforms.push(platform);
+}
+
+// --- Create Cloud ---
+function createCloud(x, y) {
+    const height = cloudMinHeight + Math.random() * (cloudMaxHeight - cloudMinHeight);
+    const size = height * 0.8; // Base size on height for the drawing function
+    const speed = cloudMinSpeed + Math.random() * (cloudMaxSpeed - cloudMinSpeed);
+    const direction = Math.random() < 0.5 ? 1 : -1;
+    const type = Math.floor(Math.random() * 3); // Randomly choose cloud type (0, 1, or 2)
+
+    clouds.push({
+        x: x,
+        y: y,
+        // width and height might not be directly used for drawing anymore, but keep for potential future use/logic
+        width: cloudMinWidth + Math.random() * (cloudMaxWidth - cloudMinWidth),
+        height: height,
+        size: size, // Add size property
+        type: type, // Add type property
+        speed: speed,
+        direction: direction
+    });
+}
+
+// --- New Cloud Drawing Function (based on provided snippet) ---
+function drawCloudShape(ctx, x, y, size, cloudType) {
+    // Note: fillStyle and globalCompositeOperation should be set before calling this function
+    // Note: save() and restore() are handled by the main draw function
+
+    if (cloudType === 0) { // 基础蓬松云
+        ctx.beginPath(); ctx.arc(x, y, size, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x + size * 0.55, y - size * 0.4, size * 0.75, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x + size * 1.1, y, size * 0.85, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x + size * 0.55, y + size * 0.4, size * 0.75, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x - size * 0.3, y + size * 0.25, size * 0.65, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x + size * 1.4, y + size * 0.1, size * 0.5, 0, Math.PI * 2); ctx.fill();
+    }
+    else if (cloudType === 1) { // 长条云
+        ctx.beginPath(); ctx.arc(x, y, size * 0.7, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x + size * 0.8, y - size * 0.2, size * 0.85, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x + size * 1.6, y, size * 0.75, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x + size * 2.4, y - size * 0.1, size * 0.75, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x + size * 1.3, y + size * 0.3, size * 0.9, 0, Math.PI * 2); ctx.fill();
+    }
+    else if (cloudType === 2) { // 聚集云
+        ctx.beginPath(); ctx.arc(x, y, size * 0.9, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x + size * 0.7, y - size * 0.4, size * 0.9, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x - size * 0.2, y - size * 0.4, size * 0.7, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x + size * 0.5, y + size * 0.3, size, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x - size * 0.4, y + size * 0.25, size * 0.8, 0, Math.PI * 2); ctx.fill();
+    }
 }
 
 // --- Input Handling (Convert screen coords to logical coords) ---
@@ -280,14 +349,37 @@ function update(dt) {
         });
     }
 
-    // Camera Scrolling (Based on Logical Height)
+    // --- Cloud Updates ---
+    clouds.forEach(cloud => {
+        cloud.x += cloud.speed * cloud.direction;
+    });
+
+    // --- Camera Scrolling ---
     let cameraOffset = 0;
     if (player.y < logicalHeight / 2) { // Check against logical midpoint
         cameraOffset = logicalHeight / 2 - player.y;
         player.y = logicalHeight / 2;
         platforms.forEach(p => p.y += cameraOffset);
+        clouds.forEach(c => c.y += cameraOffset * 0.5); // Clouds scroll slower for parallax effect
         score += Math.round(cameraOffset);
     }
+
+    // --- Cloud Management ---
+    // Remove clouds whose top edge is below the logical bottom edge
+    clouds = clouds.filter(c => c.y < logicalHeight);
+
+    // Generate new clouds to fill up to the top of the logical area
+    let highestCloudY = clouds.length > 0 ? Math.min(...clouds.map(c => c.y)) : logicalHeight;
+    // Target the top edge for generation, similar to platforms
+    const generationTargetY = -cloudMaxHeight; 
+    while (highestCloudY > generationTargetY) { // Keep generating until the top is filled
+        let spacing = cloudMinYSpacing + Math.random() * (cloudMaxYSpacing - cloudMinYSpacing);
+        let newY = highestCloudY - spacing;
+        // Generate cloud across the full logical width
+        createCloud(Math.random() * logicalWidth, newY);
+        highestCloudY = newY;
+    }
+    // --- End Cloud Management ---
 
     // Platform Management (Filter based on Logical Height - Tightened)
     platforms = platforms.filter(p => p.y < logicalHeight && !(p.type === 'breakable' && p.isBroken && p.y < player.y - 50));
@@ -382,6 +474,19 @@ function draw() {
             }
         }
     });
+
+    // Draw clouds (behind player/platforms)
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)'; // Set fill style for clouds
+    // Optional: Set composite operation if needed, but 'source-over' is default
+    // ctx.globalCompositeOperation = 'source-over';
+    clouds.forEach(cloud => {
+        // Draw only clouds potentially within the visible Y range
+        // Using cloud.size now for vertical check approximation
+        if (cloud.y + cloud.size > visibleLogicalTopY && cloud.y - cloud.size < logicalHeight) {
+             drawCloudShape(ctx, cloud.x, cloud.y, cloud.size, cloud.type);
+        }
+    });
+    // --- End Clouds ---
 
     // Draw score (Position relative to the VISIBLE logical top-left)
     ctx.fillStyle = 'black';
