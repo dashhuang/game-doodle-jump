@@ -33,18 +33,37 @@ const cloudMaxHeight = 40;
 const cloudMinSpeed = 0.1;
 const cloudMaxSpeed = 0.5;
 
+// 添加玩家随机颜色数组
+const playerColors = [
+    '#32CD32', // 亮绿色 (Lime Green)
+    '#FF4500', // 橙红色 (Orange Red)
+    '#9370DB', // 中紫色 (Medium Purple)
+    '#FFD700', // 金色 (Gold)
+    '#00CED1'  // 青色 (Dark Turquoise)
+];
+// 当前选择的玩家颜色
+let currentPlayerColor = playerColors[0]; // 默认为第一个颜色，将在init中随机选择
+
 // 玩家对象 (Use logical dimensions)
 const player = {
     x: logicalWidth / 2 - 25,
     y: logicalHeight - 100, // Position relative to logical height
-    width: 50,
-    height: 50,
+    width: 40, // Slightly narrower base width
+    height: 40, // Slightly shorter base height
+    baseWidth: 40,
+    baseHeight: 40,
     vx: 0, // 水平速度
     vy: 0, // 垂直速度
     gravity: 0.55,
     jumpPower: -16, // 起跳力度（负数表示向上）
     isJumping: false,
-    onGround: false
+    onGround: false,
+    // Squash and Stretch properties
+    scaleX: 1, 
+    scaleY: 1,
+    squashAmount: 0.2, // How much to squash/stretch (20%)
+    squashDuration: 20, // How many frames the effect lasts
+    squashTimer: 0 
 };
 
 // 平台数组 (Use logical dimensions)
@@ -64,7 +83,7 @@ let keys = {};
 let touchStartX = null; // Store logical X coordinate
 let isTouching = false;
 const moveSpeed = 5; // 水平移动速度
-const friction = 0.95; // 摩擦系数 (0 < friction < 1)
+const friction = 0.98; // 摩擦系数 (0 < friction < 1)
 
 // --- Resize Handler ---
 function resizeHandler() {
@@ -99,14 +118,20 @@ function init() {
     gameover = false;
     difficulty = 0;
     previousDifficulty = 0;
-    player.x = logicalWidth / 2 - player.width / 2;
-    player.y = logicalHeight - 100; // Initial pos relative to logical height
+    player.x = logicalWidth / 2 - player.baseWidth / 2; // Center based on base width
+    player.y = logicalHeight - 100; 
     player.vx = 0;
     player.vy = 0;
     player.isJumping = false;
     player.onGround = false;
+    player.scaleX = 1;
+    player.scaleY = 1;
+    player.squashTimer = 0;
     platforms = [];
     clouds = [];
+
+    // 随机选择一个玩家颜色
+    currentPlayerColor = playerColors[Math.floor(Math.random() * playerColors.length)];
 
     // Create initial platforms within logical coordinate space
     for (let i = 0; i < initialPlatforms; i++) {
@@ -167,7 +192,8 @@ function createPlatform(x, y, forcedType = null) {
         type: forcedType || type,
         isBroken: false,
         vx: 0,
-        direction: 1
+        direction: 1,
+        breakTimer: 0 // 添加：破碎后的消失计时器
     };
     if (platform.type === 'moving') {
         platform.vx = 1 + difficulty * 1.5;
@@ -183,15 +209,16 @@ function createCloud(x, y) {
     const speed = cloudMinSpeed + Math.random() * (cloudMaxSpeed - cloudMinSpeed);
     const direction = Math.random() < 0.5 ? 1 : -1;
     const type = Math.floor(Math.random() * 3); // Randomly choose cloud type (0, 1, or 2)
+    const layer = Math.random() < 0.7 ? 'back' : 'front'; // 70% chance to be in the back
 
     clouds.push({
         x: x,
         y: y,
-        // width and height might not be directly used for drawing anymore, but keep for potential future use/logic
         width: cloudMinWidth + Math.random() * (cloudMaxWidth - cloudMinWidth),
         height: height,
-        size: size, // Add size property
-        type: type, // Add type property
+        size: size,
+        type: type,
+        layer: layer, // Add layer property
         speed: speed,
         direction: direction
     });
@@ -330,23 +357,39 @@ function update(dt) {
 
     // Collision Detection (Use Logical Dimensions)
     player.onGround = false;
-    if (player.vy > 0) {
+    if (player.vy > 0) { // Only check when falling
         platforms.forEach(platform => {
+            // Adjust player dimensions for collision check based on BASE size
+            const checkWidth = player.baseWidth;
+            const checkHeight = player.baseHeight;
+            const checkX = player.x;
+            const checkY = player.y;
+
             if (!platform.isBroken &&
-                player.x < platform.x + platform.width &&
-                player.x + player.width > platform.x &&
-                player.y + player.height >= platform.y &&
-                player.y + player.height <= platform.y + platform.height + 10)
+                checkX < platform.x + platform.width &&
+                checkX + checkWidth > platform.x &&
+                checkY + checkHeight >= platform.y &&
+                checkY + checkHeight <= platform.y + platform.height + 10) 
             {
-                player.y = platform.y - player.height;
+                // Landed on platform
+                if (!player.isJumping) { // Trigger squash only on initial landing, not while jumping up
+                     player.squashTimer = player.squashDuration; // Start squash timer
+                }
+                player.y = platform.y - player.baseHeight; // Position based on base height
                 player.vy = player.jumpPower;
-                player.isJumping = true;
-                player.onGround = true;
+                player.isJumping = true; 
+                player.onGround = true; 
                 if (platform.type === 'breakable') {
                     platform.isBroken = true;
+                    platform.breakTimer = 30; // 设置为30帧(约0.5秒，假设60fps)
                 }
             }
         });
+    } else {
+         // Reset jumping flag if moving upwards and no longer on ground
+         if (player.vy < 0) {
+            player.isJumping = false; 
+         }
     }
 
     // --- Cloud Updates ---
@@ -382,7 +425,18 @@ function update(dt) {
     // --- End Cloud Management ---
 
     // Platform Management (Filter based on Logical Height - Tightened)
-    platforms = platforms.filter(p => p.y < logicalHeight && !(p.type === 'breakable' && p.isBroken && p.y < player.y - 50));
+    // 更新破碎平台的计时器
+    platforms.forEach(platform => {
+        if (platform.isBroken && platform.breakTimer > 0) {
+            platform.breakTimer--;
+        }
+    });
+    
+    // 移除屏幕下方的平台和破碎计时结束的平台
+    platforms = platforms.filter(p => 
+        p.y < logicalHeight && // 保留屏幕内的平台
+        !(p.type === 'breakable' && p.isBroken && p.breakTimer <= 0) // 移除计时结束的破碎平台
+    );
 
     // Generate New Platforms (Based on Logical Coordinates)
     let highestPlatformY = platforms.length > 0 ? Math.min(...platforms.map(p => p.y)) : logicalHeight;
@@ -410,6 +464,22 @@ function update(dt) {
         console.log(`Difficulty changed to: ${difficulty.toFixed(3)} (Score: ${score})`);
         previousDifficulty = difficulty;
     }
+
+    // --- Squash & Stretch Update ---
+    if (player.squashTimer > 0) {
+        player.squashTimer--;
+        // Calculate current scale based on timer progress (e.g., parabolic recovery)
+        const progress = player.squashTimer / player.squashDuration;
+        const squashFactor = 1 - Math.pow(1 - progress, 2); // Starts at 1, goes to 0
+        
+        player.scaleX = 1 + player.squashAmount * squashFactor;
+        player.scaleY = 1 - player.squashAmount * squashFactor;
+    } else {
+        // Ensure reset when timer is done
+        player.scaleX = 1;
+        player.scaleY = 1;
+    }
+    // --- End Squash & Stretch Update ---
 }
 
 // --- Drawing (Apply Scaling, Bottom Anchoring, and Adjusted Clipping) ---
@@ -418,7 +488,7 @@ function draw() {
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
 
     // Fill physical background color (covers entire screen)
-    ctx.fillStyle = '#e0ffff';
+    ctx.fillStyle = '#87CEEB';
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
     // Save context state
@@ -441,59 +511,227 @@ function draw() {
     ctx.clip();
     // --- End Clipping Region --- > MODIFIED
 
-    // --- Draw all game elements within the logical coordinate system ---
-    // No need to clear the logical background area anymore, as the whole canvas is already the correct color
-    // ctx.fillStyle = '#e0ffff';
-    // ctx.fillRect(0, visibleLogicalTopY, logicalWidth, visibleLogicalHeight); // <--- REMOVED
-
-    // Draw player (Green) - Will now be drawn even if outside logicalWidth bounds, as long as within the clip
-    ctx.fillStyle = 'green';
-    ctx.fillRect(player.x, player.y, player.width, player.height);
-
-    // Draw platforms
-    platforms.forEach(platform => {
-        // Draw only platforms potentially within the visible logical Y range
-        if (platform.y + platform.height > visibleLogicalTopY && platform.y < logicalHeight) {
-            if (platform.isBroken) {
-                ctx.fillStyle = '#aaa';
-            } else if (platform.type === 'normal') {
-                ctx.fillStyle = 'brown';
-            } else if (platform.type === 'moving') {
-                ctx.fillStyle = 'blue';
-            } else if (platform.type === 'breakable') {
-                ctx.fillStyle = 'red';
+    // --- Draw Background Clouds --- > ADDED LAYER LOGIC
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)'; // Set fill style for clouds
+    clouds.forEach(cloud => {
+        if (cloud.layer === 'back') { // Only draw background clouds here
+            // Check visibility
+            if (cloud.y + cloud.size > visibleLogicalTopY && cloud.y - cloud.size < logicalHeight) {
+                drawCloudShape(ctx, cloud.x, cloud.y, cloud.size, cloud.type);
             }
-            ctx.fillRect(platform.x, platform.y, platform.width, platform.height);
+        }
+    });
+    // --- End Background Clouds ---
+
+    // --- Draw Player --- 
+    ctx.fillStyle = currentPlayerColor; // 使用随机选择的玩家颜色
+
+    // Calculate scaled dimensions and position offset for drawing
+    const drawWidth = player.baseWidth * player.scaleX;
+    const drawHeight = player.baseHeight * player.scaleY;
+    const drawX = player.x - (drawWidth - player.baseWidth) / 2; // Adjust x to keep center
+    const drawY = player.y - (drawHeight - player.baseHeight) / 2; // Adjust y to keep center
+    const cornerRadius = 10; // Adjust for desired roundness
+
+    // Draw rounded rectangle body
+    ctx.beginPath();
+    ctx.roundRect(drawX, drawY, drawWidth, drawHeight, cornerRadius);
+    ctx.fill();
+
+    // Draw Eyes (relative to the scaled body)
+    const eyeRadius = 3;
+    const baseEyeOffsetX = drawWidth * 0.25; // Base horizontal offset from center
+    const eyeOffsetY = drawHeight * 0.3;
+    let eyeShiftX = 0; // <-- ADDED: Horizontal shift based on movement
+
+    // --- Eye Movement Logic --- > MODIFIED
+    const eyeMoveThreshold = 1.0; // Minimum speed to trigger eye movement
+    const eyeMoveAmount = drawWidth * 0.08; // How much the eyes move horizontally
+
+    if (player.vx > eyeMoveThreshold) { // Moving right
+        // currentEyeOffsetX += eyeMoveAmount; // <-- Removed
+        eyeShiftX = eyeMoveAmount; // Shift eyes to the right
+    } else if (player.vx < -eyeMoveThreshold) { // Moving left
+        // currentEyeOffsetX -= eyeMoveAmount; // <-- Removed
+        eyeShiftX = -eyeMoveAmount; // Shift eyes to the left
+    }
+    // --- End Eye Movement Logic ---
+
+    const centerX = drawX + drawWidth / 2;
+    ctx.fillStyle = 'black'; 
+    // Left eye
+    ctx.beginPath();
+    // Calculate position relative to center, then apply shift
+    ctx.arc(centerX - baseEyeOffsetX + eyeShiftX, drawY + eyeOffsetY, eyeRadius, 0, Math.PI * 2);
+    ctx.fill();
+    // Right eye
+    ctx.beginPath();
+    // Calculate position relative to center, then apply shift
+    ctx.arc(centerX + baseEyeOffsetX + eyeShiftX, drawY + eyeOffsetY, eyeRadius, 0, Math.PI * 2);
+    ctx.fill();
+    // --- End Player --- 
+
+    // --- Draw Platforms --- 
+    platforms.forEach(platform => {
+        if (platform.y + platform.height > visibleLogicalTopY && platform.y < logicalHeight) {
+            const platformX = platform.x;
+            const platformY = platform.y;
+            const platformW = platform.width;
+            const platformH = platform.height;
+            const grassHeight = platformH * 0.4; // 草地高度为平台总高度的40%
+            const platformCornerRadius = 5;
+            
+            // 确定基础颜色 (将根据平台类型修改饱和度/亮度)
+            let grassColor, soilColor;
+            
+            if (platform.isBroken) {
+                grassColor = '#aaa';
+                soilColor = '#999';
+            } else if (platform.type === 'moving') {
+                grassColor = '#8FBC8F'; // 暗海洋绿(草地部分)
+                soilColor = '#5F9EA0'; // 保留轻鸭绿色(土壤部分)
+            } else if (platform.type === 'breakable') {
+                // 冰块风格 - 淡蓝色+白色
+                grassColor = '#A5F2F3'; // 浅蓝色(冰块顶部)
+                soilColor = '#77C5D5'; // 稍深蓝色(冰块底部)
+            } else {
+                // 普通平台
+                grassColor = '#90EE90'; // 淡绿色草地
+                soilColor = '#CD853F'; // 秘鲁色土壤
+            }
+            
+            // 不再绘制平台外轮廓（去掉黑边）
+            // ctx.strokeStyle = 'black';
+            // ctx.lineWidth = 2;
+            // ctx.beginPath();
+            // ctx.roundRect(platformX, platformY, platformW, platformH, platformCornerRadius);
+            // ctx.stroke();
+            
+            // 绘制土壤(下部分)
+            ctx.fillStyle = soilColor;
+            ctx.beginPath();
+            ctx.roundRect(platformX, platformY, platformW, platformH, platformCornerRadius);
+            ctx.fill();
+            
+            // 绘制草地(上部分)
+            ctx.fillStyle = grassColor;
+            ctx.beginPath();
+            ctx.roundRect(platformX, platformY, platformW, grassHeight, 
+                [platformCornerRadius, platformCornerRadius, 0, 0]); // 只有上边缘是圆角
+            ctx.fill();
+            
+            // 绘制低多边形效果(简化版)
+            // 草地阴影三角形
+            if (!platform.isBroken) {
+                ctx.fillStyle = 'rgba(0,0,0,0.1)';
+                ctx.beginPath();
+                ctx.moveTo(platformX + platformW * 0.2, platformY);
+                ctx.lineTo(platformX + platformW * 0.5, platformY + grassHeight);
+                ctx.lineTo(platformX, platformY + grassHeight);
+                ctx.closePath();
+                ctx.fill();
+                
+                // 草地高光三角形
+                ctx.fillStyle = 'rgba(255,255,255,0.15)';
+                ctx.beginPath();
+                ctx.moveTo(platformX + platformW * 0.6, platformY);
+                ctx.lineTo(platformX + platformW, platformY);
+                ctx.lineTo(platformX + platformW, platformY + grassHeight * 0.7);
+                ctx.closePath();
+                ctx.fill();
+                
+                // 土壤部分阴影
+                ctx.fillStyle = 'rgba(0,0,0,0.15)';
+                ctx.beginPath();
+                ctx.moveTo(platformX, platformY + grassHeight);
+                ctx.lineTo(platformX + platformW * 0.4, platformY + grassHeight);
+                ctx.lineTo(platformX + platformW * 0.2, platformY + platformH);
+                ctx.lineTo(platformX, platformY + platformH);
+                ctx.closePath();
+                ctx.fill();
+            }
+            
+            // 易碎平台的裂纹 - 冰块效果
+            if (platform.type === 'breakable') {
+                // 给冰块添加裂纹和高光效果
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)'; // 明亮的裂纹
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                
+                // 几条冰块特有的线条
+                // 水平线
+                ctx.moveTo(platformX + platformW * 0.1, platformY + platformH * 0.3);
+                ctx.lineTo(platformX + platformW * 0.9, platformY + platformH * 0.3);
+                
+                // 垂直线
+                ctx.moveTo(platformX + platformW * 0.3, platformY + platformH * 0.1);
+                ctx.lineTo(platformX + platformW * 0.3, platformY + platformH * 0.7);
+                ctx.moveTo(platformX + platformW * 0.7, platformY + platformH * 0.2);
+                ctx.lineTo(platformX + platformW * 0.7, platformY + platformH * 0.9);
+                
+                // 斜线
+                ctx.moveTo(platformX + platformW * 0.2, platformY + platformH * 0.2);
+                ctx.lineTo(platformX + platformW * 0.5, platformY + platformH * 0.6);
+                ctx.stroke();
+                
+                // 增加一些冰块光泽
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+                ctx.beginPath();
+                ctx.ellipse(platformX + platformW * 0.7, platformY + platformH * 0.25, 
+                           platformW * 0.15, platformH * 0.2, 0, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            // 已破碎平台的裂缝
             if (platform.type === 'breakable' && platform.isBroken) {
-                ctx.strokeStyle = 'black';
+                // 冰块破碎效果
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
                 ctx.lineWidth = 2;
                 ctx.beginPath();
-                ctx.moveTo(platform.x + 5, platform.y + platform.height / 2);
-                ctx.lineTo(platform.x + platform.width - 5, platform.y + platform.height / 2);
+                ctx.moveTo(platformX + 5, platformY + platformH / 2);
+                ctx.lineTo(platformX + platformW - 5, platformY + platformH / 2);
+                ctx.stroke();
+                
+                // 添加额外裂缝 - 冰裂样式
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                // 放射状裂纹
+                const centerX = platformX + platformW/2;
+                const centerY = platformY + platformH/2;
+                
+                // 多条放射线
+                for (let angle = 0; angle < Math.PI*2; angle += Math.PI/4) {
+                    const endX = centerX + Math.cos(angle) * platformW * 0.4;
+                    const endY = centerY + Math.sin(angle) * platformH * 0.4;
+                    ctx.moveTo(centerX, centerY);
+                    ctx.lineTo(endX, endY);
+                }
                 ctx.stroke();
             }
         }
     });
+    // --- End Platforms --- 
 
-    // Draw clouds (behind player/platforms)
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)'; // Set fill style for clouds
-    // Optional: Set composite operation if needed, but 'source-over' is default
-    // ctx.globalCompositeOperation = 'source-over';
+    // --- Draw Foreground Clouds --- > ADDED
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)'; // Set fill style again just in case
     clouds.forEach(cloud => {
-        // Draw only clouds potentially within the visible Y range
-        // Using cloud.size now for vertical check approximation
-        if (cloud.y + cloud.size > visibleLogicalTopY && cloud.y - cloud.size < logicalHeight) {
-             drawCloudShape(ctx, cloud.x, cloud.y, cloud.size, cloud.type);
+        if (cloud.layer === 'front') { // Only draw foreground clouds here
+            // Check visibility
+            if (cloud.y + cloud.size > visibleLogicalTopY && cloud.y - cloud.size < logicalHeight) {
+                drawCloudShape(ctx, cloud.x, cloud.y, cloud.size, cloud.type);
+            }
         }
     });
-    // --- End Clouds ---
+    // --- End Foreground Clouds ---
 
-    // Draw score (Position relative to the VISIBLE logical top-left)
-    ctx.fillStyle = 'black';
+    // --- Draw Score --- 
+    ctx.fillStyle = 'white'; // Keep score white
     ctx.font = '20px Arial';
     ctx.textAlign = 'left';
-    // Position score relative to the clipped view's top-left
-    ctx.fillText('Score: ' + score, 10, visibleLogicalTopY + 30);
+    // 显示转换后的分数 (像素高度除以100取整)
+    const displayScore = Math.floor(score / 100);
+    ctx.fillText('得分: ' + displayScore, 10, visibleLogicalTopY + 30);
+    // --- End Score --- 
 
     // Restore context state (removes translation, scaling, and clipping)
     ctx.restore();
