@@ -1,6 +1,45 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
+// ===== 难度配置（统一管理所有难度相关参数） =====
+const difficultyConfig = {
+    // 基础难度计算
+    maxScore: 5000,                   // 达到最大难度所需的分数（像素高度）
+    
+    // 平台类型阈值
+    movingThreshold: 0.2,             // 移动平台出现的难度阈值
+    breakableThreshold: 0.5,          // 易碎平台出现的难度阈值
+    movingBreakableThreshold: 0.7,    // 移动易碎平台出现的难度阈值
+    springThreshold: 0.0,             // 弹簧平台出现的难度阈值（从游戏开始就有，但概率会随难度增加）
+    
+    // 平台出现概率
+    springBaseProbability: 0.08,      // 弹簧平台基础概率
+    springMaxIncrement: 0.16,         // 弹簧平台最大概率增量（难度最高时达到20%概率）
+    
+    // 特殊平台基础概率和最大增量
+    movingBaseProbability: 0.1,       // 移动平台基础概率
+    movingMaxIncrement: 0.15,          // 移动平台最大概率增量
+    
+    breakableBaseProbability: 0.05,   // 易碎平台基础概率
+    breakableMaxIncrement: 0.3,      // 易碎平台最大概率增量
+    
+    movingBreakableBaseProbability: 0.05, // 移动易碎平台基础概率
+    movingBreakableMaxIncrement: 0.5,     // 移动易碎平台最大概率增量
+    
+    // 平台间距
+    basePlatformMinYSpacing: 60,      // 初始最小间距
+    basePlatformMaxYSpacing: 200,     // 初始最大间距
+    maxPlatformMinYSpacing: 160,       // 最高难度最小间距
+    maxPlatformMaxYSpacing: 240,      // 最高难度最大间距
+    
+    // 移动平台速度
+    movingPlatformBaseSpeed: 1,       // 移动平台基础速度
+    movingPlatformSpeedIncrement: 2 // 移动平台速度难度增量
+};
+
+// 检测设备类型
+const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
 // Define logical game dimensions
 const logicalWidth = 400;
 const logicalHeight = 600;
@@ -63,7 +102,13 @@ const player = {
     scaleY: 1,
     squashAmount: 0.2, // How much to squash/stretch (20%)
     squashDuration: 20, // How many frames the effect lasts
-    squashTimer: 0 
+    squashTimer: 0,
+    // 加速度相关属性
+    acceleration: 0.3, // 每帧加速度
+    maxSpeed: 7, // 最大速度
+    inputTime: 0, // 按键持续时间计数器
+    // 移动方向状态（新增）
+    movementState: 'idle' // 'left', 'right', 或 'idle'
 };
 
 // 平台数组 (Use logical dimensions)
@@ -71,19 +116,93 @@ let platforms = [];
 const platformWidth = 70;
 const platformHeight = 15;
 const initialPlatforms = 5; // 初始平台数量
-// Base Spacing (at difficulty 0)
-const basePlatformMinYSpacing = 60;
-const basePlatformMaxYSpacing = 200;
-// Max Spacing (at difficulty 1)
-const maxPlatformMinYSpacing = 80;
-const maxPlatformMaxYSpacing = 240;
 
 // 游戏控制
 let keys = {};
 let touchStartX = null; // Store logical X coordinate
 let isTouching = false;
-const moveSpeed = 5; // 水平移动速度
-const friction = 0.98; // 摩擦系数 (0 < friction < 1)
+const moveSpeed = 2.5; // 初始移动速度（降低初始速度以使加速更明显）
+const friction = 0.95; // 摩擦系数 (0 < friction < 1)
+
+// 虚拟摇杆参数
+let joystickActive = false;
+let joystickStartX = 0;
+let joystickStartY = 0;
+let joystickCurrentX = 0;
+let joystickCurrentY = 0;
+const joystickRadius = 50; // 摇杆基座半径（物理像素）
+const joystickKnobRadius = 25; // 摇杆手柄半径（物理像素）
+const joystickDeadZone = 0.2; // 摇杆死区（归一化值，0-1）
+const joystickSensitivity = 1.2; // 摇杆灵敏度
+// 屏幕边缘宽度（左右两侧留给点按控制的区域）
+const edgeWidth = 60; // 左右两侧各60像素用于点按控制
+// 初始化屏幕边缘区域变量
+let leftEdgeWidth = edgeWidth;
+let rightEdgeWidth = edgeWidth;
+
+// 设置视口实际高度的辅助函数
+function setViewportHeight() {
+    // 设置CSS变量用于真实视口高度
+    const vh = window.innerHeight * 0.01;
+    document.documentElement.style.setProperty('--vh', `${vh}px`);
+    
+    // 更新画布尺寸
+    canvasWidth = window.innerWidth;
+    canvasHeight = window.innerHeight;
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+    
+    // 重新计算缩放和偏移
+    calculateScalingAndOffset();
+}
+
+// 计算缩放和偏移值（抽取自resizeHandler）
+function calculateScalingAndOffset() {
+    // Calculate scale factor based on width, capped by maxScale
+    scale = Math.min(canvasWidth / logicalWidth, maxScale);
+
+    // Calculate horizontal offset for centering
+    const scaledLogicalWidth = logicalWidth * scale;
+    offsetX = (canvasWidth - scaledLogicalWidth) / 2;
+
+    // Calculate vertical offset to anchor the bottom of the logical view to the canvas bottom
+    const scaledLogicalHeight = logicalHeight * scale;
+    offsetY = canvasHeight - scaledLogicalHeight;
+    
+    // 检查并处理安全区域
+    handleSafeAreas();
+}
+
+// 为移动设备进行额外调整
+function adjustForMobile() {
+    if (isMobile) {
+        // 阻止双击缩放
+        let lastTouchEnd = 0;
+        document.addEventListener('touchend', function(e) {
+            const now = Date.now();
+            if (now - lastTouchEnd <= 300) {
+                e.preventDefault();
+            }
+            lastTouchEnd = now;
+        }, false);
+        
+        // 立即更新视口高度
+        setViewportHeight();
+    }
+}
+
+// 处理安全区域
+function handleSafeAreas() {
+    // 获取安全区域大小（通过CSS环境变量）
+    const safeAreaTop = parseInt(getComputedStyle(document.documentElement).getPropertyValue('env(safe-area-inset-top)')) || 0;
+    const safeAreaBottom = parseInt(getComputedStyle(document.documentElement).getPropertyValue('env(safe-area-inset-bottom)')) || 0;
+    const safeAreaLeft = parseInt(getComputedStyle(document.documentElement).getPropertyValue('env(safe-area-inset-left)')) || 0;
+    const safeAreaRight = parseInt(getComputedStyle(document.documentElement).getPropertyValue('env(safe-area-inset-right)')) || 0;
+    
+    // 更新边缘区域大小，考虑安全区域
+    leftEdgeWidth = edgeWidth + safeAreaLeft;
+    rightEdgeWidth = edgeWidth + safeAreaRight;
+}
 
 // --- Resize Handler ---
 function resizeHandler() {
@@ -92,16 +211,7 @@ function resizeHandler() {
     canvas.width = canvasWidth;
     canvas.height = canvasHeight;
 
-    // Calculate scale factor based on width, capped by maxScale
-    scale = Math.min(canvasWidth / logicalWidth, maxScale); // <--- MODIFIED
-
-    // Calculate horizontal offset for centering
-    const scaledLogicalWidth = logicalWidth * scale;
-    offsetX = (canvasWidth - scaledLogicalWidth) / 2; // <--- MODIFIED
-
-    // Calculate vertical offset to anchor the bottom of the logical view to the canvas bottom
-    const scaledLogicalHeight = logicalHeight * scale;
-    offsetY = canvasHeight - scaledLogicalHeight; // <--- MODIFIED (Bottom Anchoring)
+    calculateScalingAndOffset();
 
     // Redraw immediately after resize
     if (!gameLoopRunning && gameover) {
@@ -127,6 +237,7 @@ function init() {
     player.scaleX = 1;
     player.scaleY = 1;
     player.squashTimer = 0;
+    player.inputTime = 0; // 重置按键时间计数器
     platforms = [];
     clouds = [];
 
@@ -135,7 +246,7 @@ function init() {
 
     // Create initial platforms within logical coordinate space
     for (let i = 0; i < initialPlatforms; i++) {
-        let yPos = logicalHeight - 50 - i * ((basePlatformMinYSpacing + basePlatformMaxYSpacing) / 2);
+        let yPos = logicalHeight - 50 - i * ((difficultyConfig.basePlatformMinYSpacing + difficultyConfig.basePlatformMaxYSpacing) / 2);
         createPlatform(Math.random() * (logicalWidth - platformWidth), yPos, 'normal');
     }
     platforms[0].x = player.x + (player.width - platformWidth) / 2;
@@ -155,6 +266,9 @@ function init() {
     // Ensure resize handler runs at least once initially
     resizeHandler();
 
+    // 为移动设备进行额外调整
+    adjustForMobile();
+
     if (!gameLoopRunning) {
         requestAnimationFrame(gameLoop);
         gameLoopRunning = true;
@@ -166,21 +280,66 @@ function createPlatform(x, y, forcedType = null) {
     let type = 'normal';
     if (!forcedType) { // Only determine type randomly if not forced
         const rand = Math.random();
-        const movingThreshold = 0.2;
-        const breakableThreshold = 0.5;
+        
+        // 计算各类平台的当前概率
+        let springProb = 0;
         let movingProb = 0;
         let breakableProb = 0;
-        if (difficulty >= movingThreshold) {
-            movingProb = 0.1 + 0.2 * ((difficulty - movingThreshold) / (1 - movingThreshold));
+        let movingBreakableProb = 0;
+        
+        // 弹簧平台概率计算（随难度增加）
+        if (difficulty >= difficultyConfig.springThreshold) {
+            springProb = difficultyConfig.springBaseProbability + 
+                difficultyConfig.springMaxIncrement * 
+                ((difficulty - difficultyConfig.springThreshold) / 
+                (1 - difficultyConfig.springThreshold));
         }
-        if (difficulty >= breakableThreshold) {
-            breakableProb = 0.05 + 0.15 * ((difficulty - breakableThreshold) / (1 - breakableThreshold));
+        
+        // 移动平台概率计算
+        if (difficulty >= difficultyConfig.movingThreshold) {
+            movingProb = difficultyConfig.movingBaseProbability + 
+                difficultyConfig.movingMaxIncrement * 
+                ((difficulty - difficultyConfig.movingThreshold) / 
+                (1 - difficultyConfig.movingThreshold));
         }
-        if (rand < breakableProb && difficulty >= breakableThreshold) {
+        
+        // 易碎平台概率计算
+        if (difficulty >= difficultyConfig.breakableThreshold) {
+            breakableProb = difficultyConfig.breakableBaseProbability + 
+                difficultyConfig.breakableMaxIncrement * 
+                ((difficulty - difficultyConfig.breakableThreshold) / 
+                (1 - difficultyConfig.breakableThreshold));
+        }
+        
+        // 移动易碎平台概率计算
+        if (difficulty >= difficultyConfig.movingBreakableThreshold) {
+            movingBreakableProb = difficultyConfig.movingBreakableBaseProbability + 
+                difficultyConfig.movingBreakableMaxIncrement * 
+                ((difficulty - difficultyConfig.movingBreakableThreshold) / 
+                (1 - difficultyConfig.movingBreakableThreshold));
+        }
+        
+        // 根据随机值和计算出的概率确定平台类型（按优先级顺序判断）
+        let probSum = 0;
+        
+        // 弹簧平台判断（最高优先级）
+        if (rand < springProb) {
+            type = 'spring';
+        }
+        // 移动易碎平台判断
+        else if (rand < (probSum += springProb) + movingBreakableProb && difficulty >= difficultyConfig.movingBreakableThreshold) {
+            type = 'movingBreakable';
+        }
+        // 易碎平台判断
+        else if (rand < (probSum += movingBreakableProb) + breakableProb && difficulty >= difficultyConfig.breakableThreshold) {
             type = 'breakable';
-        } else if (rand < breakableProb + movingProb && difficulty >= movingThreshold) {
+        }
+        // 移动平台判断
+        else if (rand < (probSum += breakableProb) + movingProb && difficulty >= difficultyConfig.movingThreshold) {
             type = 'moving';
-        } else {
+        }
+        // 默认普通平台
+        else {
             type = 'normal';
         }
     }
@@ -193,10 +352,12 @@ function createPlatform(x, y, forcedType = null) {
         isBroken: false,
         vx: 0,
         direction: 1,
-        breakTimer: 0 // 添加：破碎后的消失计时器
+        breakTimer: 0, // 添加：破碎后的消失计时器
+        springActive: false, // 弹簧是否激活
+        springTimer: 0 // 弹簧动画计时器
     };
-    if (platform.type === 'moving') {
-        platform.vx = 1 + difficulty * 1.5;
+    if (platform.type === 'moving' || platform.type === 'movingBreakable') {
+        platform.vx = difficultyConfig.movingPlatformBaseSpeed + difficulty * difficultyConfig.movingPlatformSpeedIncrement;
         platform.direction = Math.random() < 0.5 ? 1 : -1;
     }
     platforms.push(platform);
@@ -255,6 +416,11 @@ function drawCloudShape(ctx, x, y, size, cloudType) {
 
 // --- Input Handling (Convert screen coords to logical coords) ---
 document.addEventListener('keydown', (e) => {
+    // 如果游戏已结束，任意键重新开始
+    if (gameover) {
+        init();
+        return;
+    }
     keys[e.code] = true;
 });
 
@@ -271,18 +437,40 @@ function getLogicalCoords(screenX, screenY) {
 
 canvas.addEventListener('touchstart', (e) => {
     e.preventDefault();
-    isTouching = true;
     const touch = e.touches[0];
     const logicalPos = getLogicalCoords(touch.clientX, touch.clientY);
-    touchStartX = logicalPos.x; // Store logical X
+    
+    // 检查是否在屏幕左边缘或右边缘（用于左右点按控制）
+    if (touch.clientX < leftEdgeWidth || touch.clientX > canvasWidth - rightEdgeWidth) {
+        // 触摸屏幕左边缘或右边缘，使用点按控制
+        isTouching = true;
+        touchStartX = logicalPos.x;
+    } else {
+        // 触摸屏幕中间区域，激活虚拟摇杆
+        joystickActive = true;
+        joystickStartX = touch.clientX;
+        joystickStartY = touch.clientY;
+        joystickCurrentX = touch.clientX;
+        joystickCurrentY = touch.clientY;
+    }
 }, { passive: false });
 
 canvas.addEventListener('touchmove', (e) => {
     e.preventDefault();
-    if (isTouching) {
-        const touch = e.touches[0];
+    const touch = e.touches[0];
+    
+    if (joystickActive) {
+        // 更新摇杆位置
+        joystickCurrentX = touch.clientX;
+        joystickCurrentY = touch.clientY;
+    } else if (isTouching) {
         const logicalPos = getLogicalCoords(touch.clientX, touch.clientY);
-        touchStartX = logicalPos.x; // Update logical X
+        // 只有当手指从屏幕一边移动到另一边时才更新touchStartX
+        // 这样可以实现长按同一侧屏幕不断加速的效果
+        if ((touchStartX < logicalWidth / 2 && logicalPos.x >= logicalWidth / 2) || 
+            (touchStartX >= logicalWidth / 2 && logicalPos.x < logicalWidth / 2)) {
+            touchStartX = logicalPos.x; // 只有切换左右方向时才更新
+        }
     }
 }, { passive: false });
 
@@ -294,34 +482,96 @@ canvas.addEventListener('touchend', (e) => {
          // Prevent isTouching state bleeding into new game
          isTouching = false;
          touchStartX = null;
+         joystickActive = false;
          return; // Don't process touch for movement if restarting
      }
-    // Handle regular touchend logic only if not game over
-    isTouching = false;
-    touchStartX = null;
-});
+    
+    // 检查哪种控制方式处于激活状态
+    if (joystickActive) {
+        joystickActive = false;
+    } else {
+        // 常规点按控制处理
+        isTouching = false;
+        touchStartX = null;
+    }
+}, { passive: false });
 
 function handleInput() {
     let horizontalInput = false;
+    const maxAccelerationFrames = 20; // 减少达到最大速度的时间（从30减少到20）
 
+    // 检查键盘输入
     if (keys['ArrowLeft'] || keys['KeyA']) {
-        player.vx = -moveSpeed;
+        // 向左加速
+        player.inputTime++;
+        const currentSpeed = Math.min(player.maxSpeed, moveSpeed + player.acceleration * Math.min(player.inputTime, maxAccelerationFrames));
+        player.vx = -currentSpeed;
+        player.movementState = 'left';
         horizontalInput = true;
     } else if (keys['ArrowRight'] || keys['KeyD']) {
-        player.vx = moveSpeed;
+        // 向右加速
+        player.inputTime++;
+        const currentSpeed = Math.min(player.maxSpeed, moveSpeed + player.acceleration * Math.min(player.inputTime, maxAccelerationFrames));
+        player.vx = currentSpeed;
+        player.movementState = 'right';
         horizontalInput = true;
-    }
-
-    // 触摸控制 (Compare logical touch X with logical center)
-    if (isTouching && touchStartX !== null) {
-        if (touchStartX < logicalWidth / 2) { //触摸左半边 (logical check)
-             player.vx = -moveSpeed;
-             horizontalInput = true;
-        } else { // 触摸右半边 (logical check)
-            player.vx = moveSpeed;
-            horizontalInput = true;
+    } else {
+        // 如果没有按键输入，检查触摸输入
+        if (!(isTouching && touchStartX !== null) && !joystickActive) {
+            player.inputTime = 0;
+            player.movementState = 'idle';
         }
     }
+
+    // 处理摇杆输入（优先级高于点按）
+    if (joystickActive) {
+        // 计算摇杆位移（归一化为-1到1）
+        const dx = joystickCurrentX - joystickStartX;
+        const distance = Math.abs(dx);
+        const normalizedDistance = Math.min(distance / joystickRadius, 1.0);
+        
+        // 应用死区
+        if (normalizedDistance > joystickDeadZone) {
+            const direction = dx > 0 ? 1 : -1;
+            const activeDistance = (normalizedDistance - joystickDeadZone) / (1 - joystickDeadZone);
+            
+            // 计算当前速度，灵敏度越高越快达到最大速度
+            player.inputTime++;
+            const speedFactor = activeDistance * joystickSensitivity;
+            const currentSpeed = Math.min(player.maxSpeed, moveSpeed + player.acceleration * Math.min(player.inputTime, maxAccelerationFrames) * speedFactor);
+            
+            player.vx = currentSpeed * direction;
+            player.movementState = direction > 0 ? 'right' : 'left';
+            horizontalInput = true;
+        } else {
+            // 在死区内，不增加inputTime但也不重置
+        }
+    } 
+    // 触摸控制（如果摇杆未激活）
+    else if (isTouching && touchStartX !== null) {
+        player.inputTime++;
+        const currentSpeed = Math.min(player.maxSpeed, moveSpeed + player.acceleration * Math.min(player.inputTime, maxAccelerationFrames));
+        
+        if (touchStartX < logicalWidth / 2) { //触摸左半边 (logical check)
+             player.vx = -currentSpeed;
+             player.movementState = 'left';
+             horizontalInput = true;
+        } else { // 触摸右半边 (logical check)
+            player.vx = currentSpeed;
+            player.movementState = 'right';
+            horizontalInput = true;
+        }
+    } else if (!keys['ArrowLeft'] && !keys['ArrowRight'] && !keys['KeyA'] && !keys['KeyD']) {
+        // 如果没有触摸输入且没有按键输入，重置计时器
+        player.inputTime = 0;
+        player.movementState = 'idle';
+    }
+    
+    // 输出当前速度信息（调试用）
+    if (horizontalInput && player.inputTime % 10 === 0) {
+        console.log(`当前速度: ${Math.abs(player.vx).toFixed(2)}, 按键帧数: ${player.inputTime}`);
+    }
+    
     return horizontalInput;
 }
 
@@ -346,7 +596,7 @@ function update(dt) {
 
     // Platform Updates (Use Logical Dimensions)
     platforms.forEach(platform => {
-        if (platform.type === 'moving') {
+        if (platform.type === 'moving' || platform.type === 'movingBreakable') {
             platform.x += platform.vx * platform.direction;
             // Bounce using logical width
             if (platform.x <= 0 || platform.x + platform.width >= logicalWidth) {
@@ -376,10 +626,19 @@ function update(dt) {
                      player.squashTimer = player.squashDuration; // Start squash timer
                 }
                 player.y = platform.y - player.baseHeight; // Position based on base height
-                player.vy = player.jumpPower;
+                
+                // 根据平台类型确定跳跃力度
+                if (platform.type === 'spring') {
+                    platform.springActive = true;
+                    platform.springTimer = 10; // 10帧的弹簧动画
+                    player.vy = player.jumpPower * 1.5; // 弹簧砖块提供1.5倍跳跃力
+                } else {
+                    player.vy = player.jumpPower; // 普通跳跃力
+                }
+                
                 player.isJumping = true; 
                 player.onGround = true; 
-                if (platform.type === 'breakable') {
+                if (platform.type === 'breakable' || platform.type === 'movingBreakable') {
                     platform.isBroken = true;
                     platform.breakTimer = 30; // 设置为30帧(约0.5秒，假设60fps)
                 }
@@ -438,10 +697,22 @@ function update(dt) {
         !(p.type === 'breakable' && p.isBroken && p.breakTimer <= 0) // 移除计时结束的破碎平台
     );
 
+    // --- 弹簧特效动画 ---
+    platforms.forEach(platform => {
+        if (platform.type === 'spring' && platform.springActive) {
+            platform.springTimer--;
+            if (platform.springTimer <= 0) {
+                platform.springActive = false;
+            }
+        }
+    });
+
     // Generate New Platforms (Based on Logical Coordinates)
     let highestPlatformY = platforms.length > 0 ? Math.min(...platforms.map(p => p.y)) : logicalHeight;
-    const currentMinSpacing = basePlatformMinYSpacing + (maxPlatformMinYSpacing - basePlatformMinYSpacing) * difficulty;
-    const currentMaxSpacing = basePlatformMaxYSpacing + (maxPlatformMaxYSpacing - basePlatformMaxYSpacing) * difficulty;
+    const currentMinSpacing = difficultyConfig.basePlatformMinYSpacing + 
+                            (difficultyConfig.maxPlatformMinYSpacing - difficultyConfig.basePlatformMinYSpacing) * difficulty;
+    const currentMaxSpacing = difficultyConfig.basePlatformMaxYSpacing + 
+                            (difficultyConfig.maxPlatformMaxYSpacing - difficultyConfig.basePlatformMaxYSpacing) * difficulty;
 
     while (highestPlatformY > -platformHeight) {
         let spacing = currentMinSpacing + Math.random() * (currentMaxSpacing - currentMinSpacing);
@@ -458,8 +729,8 @@ function update(dt) {
         // drawGameOver will handle scaling
     }
 
-    // Difficulty Update (remains the same)
-    difficulty = Math.min(1, score / 3000);
+    // Difficulty Update
+    difficulty = Math.min(1, score / difficultyConfig.maxScore);
     if (difficulty !== previousDifficulty) {
         console.log(`Difficulty changed to: ${difficulty.toFixed(3)} (Score: ${score})`);
         previousDifficulty = difficulty;
@@ -544,30 +815,36 @@ function draw() {
     const eyeOffsetY = drawHeight * 0.3;
     let eyeShiftX = 0; // <-- ADDED: Horizontal shift based on movement
 
-    // --- Eye Movement Logic --- > MODIFIED
-    const eyeMoveThreshold = 1.0; // Minimum speed to trigger eye movement
+    // --- 基于移动状态的眼睛表情 ---
     const eyeMoveAmount = drawWidth * 0.08; // How much the eyes move horizontally
 
-    if (player.vx > eyeMoveThreshold) { // Moving right
-        // currentEyeOffsetX += eyeMoveAmount; // <-- Removed
-        eyeShiftX = eyeMoveAmount; // Shift eyes to the right
-    } else if (player.vx < -eyeMoveThreshold) { // Moving left
-        // currentEyeOffsetX -= eyeMoveAmount; // <-- Removed
-        eyeShiftX = -eyeMoveAmount; // Shift eyes to the left
+    // 根据移动状态改变眼睛位置
+    if (player.movementState === 'right') {
+        eyeShiftX = eyeMoveAmount;
+    } else if (player.movementState === 'left') {
+        eyeShiftX = -eyeMoveAmount;
     }
-    // --- End Eye Movement Logic ---
+
+    // 根据速度显示特殊效果
+    let speedRatio = Math.abs(player.vx) / player.maxSpeed;
+    let eyeSize = eyeRadius;
+    if (speedRatio > 0.7) {
+        // 高速时眼睛变小，显示聚焦效果
+        eyeSize = eyeRadius * 0.8;
+    }
+    // --- 眼睛表情逻辑结束 ---
 
     const centerX = drawX + drawWidth / 2;
     ctx.fillStyle = 'black'; 
     // Left eye
     ctx.beginPath();
     // Calculate position relative to center, then apply shift
-    ctx.arc(centerX - baseEyeOffsetX + eyeShiftX, drawY + eyeOffsetY, eyeRadius, 0, Math.PI * 2);
+    ctx.arc(centerX - baseEyeOffsetX + eyeShiftX, drawY + eyeOffsetY, eyeSize, 0, Math.PI * 2);
     ctx.fill();
     // Right eye
     ctx.beginPath();
     // Calculate position relative to center, then apply shift
-    ctx.arc(centerX + baseEyeOffsetX + eyeShiftX, drawY + eyeOffsetY, eyeRadius, 0, Math.PI * 2);
+    ctx.arc(centerX + baseEyeOffsetX + eyeShiftX, drawY + eyeOffsetY, eyeSize, 0, Math.PI * 2);
     ctx.fill();
     // --- End Player --- 
 
@@ -594,6 +871,14 @@ function draw() {
                 // 冰块风格 - 淡蓝色+白色
                 grassColor = '#A5F2F3'; // 浅蓝色(冰块顶部)
                 soilColor = '#77C5D5'; // 稍深蓝色(冰块底部)
+            } else if (platform.type === 'spring') {
+                // 弹簧砖块风格 - 橙黄色
+                grassColor = '#FFD700'; // 金色(弹簧顶部)
+                soilColor = '#FFA500'; // 橙色(弹簧底部)
+            } else if (platform.type === 'movingBreakable') {
+                // 移动+易碎平台 - 紫色
+                grassColor = '#E6A8D7'; // 淡紫色(顶部)
+                soilColor = '#9966CC'; // 中紫色(底部)
             } else {
                 // 普通平台
                 grassColor = '#90EE90'; // 淡绿色草地
@@ -652,9 +937,9 @@ function draw() {
             }
             
             // 易碎平台的裂纹 - 冰块效果
-            if (platform.type === 'breakable') {
+            if (platform.type === 'breakable' || platform.type === 'movingBreakable') {
                 // 给冰块添加裂纹和高光效果
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)'; // 明亮的裂纹
+                ctx.strokeStyle = platform.type === 'breakable' ? 'rgba(255, 255, 255, 0.7)' : 'rgba(255, 240, 255, 0.7)';
                 ctx.lineWidth = 1;
                 ctx.beginPath();
                 
@@ -675,17 +960,51 @@ function draw() {
                 ctx.stroke();
                 
                 // 增加一些冰块光泽
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+                ctx.fillStyle = platform.type === 'breakable' ? 'rgba(255, 255, 255, 0.3)' : 'rgba(255, 240, 255, 0.3)';
                 ctx.beginPath();
                 ctx.ellipse(platformX + platformW * 0.7, platformY + platformH * 0.25, 
                            platformW * 0.15, platformH * 0.2, 0, 0, Math.PI * 2);
                 ctx.fill();
             }
             
-            // 已破碎平台的裂缝
-            if (platform.type === 'breakable' && platform.isBroken) {
-                // 冰块破碎效果
+            // 弹簧砖块的特殊效果
+            if (platform.type === 'spring') {
+                // 绘制弹簧图案
                 ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+                ctx.lineWidth = 2;
+                
+                // 弹簧图案 - 在平台上方绘制弹簧
+                const springBaseX = platformX + platformW/2;
+                const springBaseY = platformY;
+                const springWidth = platformW * 0.3;
+                const springHeight = platform.springActive ? platformH * 0.5 : platformH * 0.3; // 激活时拉长
+                
+                // 绘制弹簧线圈
+                ctx.beginPath();
+                ctx.moveTo(springBaseX - springWidth/2, springBaseY);
+                
+                // 弹簧线圈数
+                const coils = 3;
+                const coilHeight = springHeight / (coils * 2);
+                
+                for (let i = 0; i < coils; i++) {
+                    // 一个完整的波浪
+                    ctx.lineTo(springBaseX + springWidth/2, springBaseY - (i*2+1)*coilHeight);
+                    ctx.lineTo(springBaseX - springWidth/2, springBaseY - (i*2+2)*coilHeight);
+                }
+                
+                ctx.stroke();
+                
+                // 绘制弹簧顶部小板
+                ctx.fillStyle = 'rgba(255, 215, 0, 0.8)'; // 金色半透明
+                const topY = springBaseY - springHeight;
+                ctx.fillRect(springBaseX - springWidth*0.6, topY - platformH*0.15, springWidth*1.2, platformH*0.15);
+            }
+            
+            // 已破碎平台的裂缝
+            if ((platform.type === 'breakable' || platform.type === 'movingBreakable') && platform.isBroken) {
+                // 冰块破碎效果
+                ctx.strokeStyle = platform.type === 'breakable' ? 'rgba(255, 255, 255, 0.9)' : 'rgba(255, 240, 255, 0.9)';
                 ctx.lineWidth = 2;
                 ctx.beginPath();
                 ctx.moveTo(platformX + 5, platformY + platformH / 2);
@@ -712,8 +1031,8 @@ function draw() {
     });
     // --- End Platforms --- 
 
-    // --- Draw Foreground Clouds --- > ADDED
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)'; // Set fill style again just in case
+    // --- Draw Foreground Clouds --- > ADDED LAYER LOGIC
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)'; // Set fill style for clouds
     clouds.forEach(cloud => {
         if (cloud.layer === 'front') { // Only draw foreground clouds here
             // Check visibility
@@ -724,14 +1043,60 @@ function draw() {
     });
     // --- End Foreground Clouds ---
 
-    // --- Draw Score --- 
-    ctx.fillStyle = 'white'; // Keep score white
-    ctx.font = '20px Arial';
-    ctx.textAlign = 'left';
-    // 显示转换后的分数 (像素高度除以100取整)
+    // Score Display (Use logical coordinates, but anchor to top, account for offset)
+    ctx.restore(); // Restore the context state before drawing Score
+    
+    // Apply scaling for UI
+    ctx.save();
+    // Score is displayed in physical coordinates at the top of the screen
+    ctx.font = '48px Arial';
+    ctx.fillStyle = 'white';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+
+    // 获取安全区域顶部尺寸
+    const safeAreaTop = parseInt(getComputedStyle(document.documentElement).getPropertyValue('env(safe-area-inset-top)')) || 0;
+    // 使用分数显示位置，考虑安全区域
+    const scoreY = Math.max(20, safeAreaTop + 10);
+
+    // Use displayScore for readability
     const displayScore = Math.floor(score / 100);
-    ctx.fillText('得分: ' + displayScore, 10, visibleLogicalTopY + 30);
-    // --- End Score --- 
+    ctx.fillText(`${displayScore}`, canvasWidth / 2, scoreY);
+
+    // Draw virtual joystick if active
+    if (joystickActive) {
+        // 绘制摇杆基座（透明圆）
+        ctx.globalAlpha = 0.3;
+        ctx.fillStyle = '#000000';
+        ctx.beginPath();
+        ctx.arc(joystickStartX, joystickStartY, joystickRadius, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // 计算摇杆手柄位置（限制在基座圆内）
+        const dx = joystickCurrentX - joystickStartX;
+        const dy = joystickCurrentY - joystickStartY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const maxDistance = joystickRadius - joystickKnobRadius/2;
+        
+        let knobX = joystickStartX;
+        let knobY = joystickStartY;
+        
+        if (distance > 0) {
+            const limitedDistance = Math.min(distance, maxDistance);
+            knobX = joystickStartX + (dx / distance) * limitedDistance;
+            knobY = joystickStartY + (dy / distance) * limitedDistance;
+        }
+        
+        // 绘制摇杆手柄
+        ctx.globalAlpha = 0.5;
+        ctx.fillStyle = '#FFFFFF';
+        ctx.beginPath();
+        ctx.arc(knobX, knobY, joystickKnobRadius, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // 重置透明度
+        ctx.globalAlpha = 1.0;
+    }
 
     // Restore context state (removes translation, scaling, and clipping)
     ctx.restore();
@@ -751,9 +1116,10 @@ function drawGameOver() {
      ctx.textAlign = 'center';
      // Center text on the physical canvas width/height
      ctx.fillText('Game Over!', canvasWidth / 2, canvasHeight / 2 - 40);
-     ctx.font = '20px Arial';
-     ctx.fillText('Score: ' + score, canvasWidth / 2, canvasHeight / 2);
-     ctx.fillText('Tap or Click to restart', canvasWidth / 2, canvasHeight / 2 + 40); // Updated text
+     ctx.font = '24px Arial';
+     const displayScore = Math.floor(score / 100);
+     ctx.fillText('得分: ' + displayScore, canvasWidth / 2, canvasHeight / 2);
+     ctx.fillText('点击或触摸屏幕重新开始', canvasWidth / 2, canvasHeight / 2 + 40); // Updated text
 }
 
 // --- Game Loop (remains mostly the same) ---
@@ -781,17 +1147,7 @@ window.addEventListener('resize', resizeHandler);
 // Add click listener for restart (especially for desktop)
 canvas.addEventListener('click', (e) => {
     if (gameover) {
-        // Restart logic - check if click is within the rough screen area?
-        // For simplicity, any click restarts when game over.
         init();
-        // // More precise: Check if click was within the centered logical area bounds on screen
-        // const scaledLogicalWidth = logicalWidth * scale;
-        // const actualGameAreaY = offsetY; // Top of game area on screen
-        // const actualGameAreaHeight = canvasHeight - offsetY; // Height of game area on screen
-        // if (e.clientX >= offsetX && e.clientX <= offsetX + scaledLogicalWidth &&
-        //     e.clientY >= actualGameAreaY && e.clientY <= actualGameAreaY + actualGameAreaHeight) {
-        //      init();
-        // }
     }
 });
 
@@ -804,12 +1160,22 @@ canvas.addEventListener('touchend', (e) => {
          // Prevent isTouching state bleeding into new game
          isTouching = false;
          touchStartX = null;
+         joystickActive = false;
          return; // Don't process touch for movement if restarting
      }
     // Handle regular touchend logic only if not game over
     isTouching = false;
     touchStartX = null;
 });
+
+// 设置事件监听
+window.addEventListener('resize', resizeHandler);
+window.addEventListener('orientationchange', () => {
+    setTimeout(setViewportHeight, 100);
+});
+
+// 初始化时检测移动设备并进行相应调整
+adjustForMobile();
 
 // --- Start Game ---
 init(); // Calls resizeHandler inside

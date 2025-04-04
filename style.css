@@ -1,12 +1,28 @@
+html {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    position: fixed;
+    touch-action: none;
+    overscroll-behavior: none;
+}
+
 body {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     margin: 0;
+    padding: 0;
     background-color: #333; /* Darker background for full screen */
     font-family: sans-serif;
     overflow: hidden; /* Hide scrollbars */
+    height: 100%;
+    width: 100%;
+    position: fixed;
+    overscroll-behavior: none;
 }
 
 canvas {
@@ -15,8 +31,25 @@ canvas {
     display: block; /* Remove extra space below canvas */
     width: 100vw; /* Fill viewport width */
     height: 100vh; /* Fill viewport height */
+    height: calc(var(--vh, 1vh) * 100); /* 使用动态计算的视口高度 */
+    touch-action: none;
 }
 
 h1 {
     display: none; /* Hide the title in full screen mode */
+}
+
+/* 处理安全区域 */
+@supports (padding: env(safe-area-inset-top)) {
+    body {
+        padding-top: env(safe-area-inset-top);
+        padding-bottom: env(safe-area-inset-bottom);
+        padding-left: env(safe-area-inset-left);
+        padding-right: env(safe-area-inset-right);
+    }
+    
+    canvas {
+        padding-top: env(safe-area-inset-top);
+        padding-bottom: env(safe-area-inset-bottom);
+    }
 } 
