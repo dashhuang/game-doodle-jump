@@ -11,35 +11,39 @@ const difficultyConfig = {
     breakableThreshold: 0.5,          // 易碎平台出现的难度阈值
     movingBreakableThreshold: 0.7,    // 移动易碎平台出现的难度阈值
     springThreshold: 0.0,             // 弹簧道具出现的难度阈值（从游戏开始就有，但概率会随难度增加）
-    fakeThreshold: 0.0,               // 假砖块出现的难度阈值
+    phantomThreshold: 0.0,            // 假砖块出现的难度阈值
     
     // 平台出现概率
     springBaseProbability: 0.08,      // 弹簧道具基础概率
-    springMaxIncrement: 0.16,         // 弹簧道具最大概率增量（难度最高时达到24%概率）
+    springMaxIncrement: 0.1,         // 弹簧道具最大概率增量（难度最高时达到24%概率）
     
     // 特殊平台基础概率和最大增量
     movingBaseProbability: 0.1,       // 移动平台基础概率
-    movingMaxIncrement: 0.15,         // 移动平台最大概率增量
+    movingMaxIncrement: 0.15,          // 移动平台最大概率增量
     
     breakableBaseProbability: 0.05,   // 易碎平台基础概率
-    breakableMaxIncrement: 0.3,       // 易碎平台最大概率增量
+    breakableMaxIncrement: 0.3,      // 易碎平台最大概率增量
     
     movingBreakableBaseProbability: 0.05, // 移动易碎平台基础概率
     movingBreakableMaxIncrement: 0.5,     // 移动易碎平台最大概率增量
     
-    // 假砖块概率
-    fakeBaseProbability: 0.1,        // 假砖块基础概率 
-    fakeMaxIncrement: 0.1,           // 假砖块最大概率增量
+    // 假砖块生成参数
+    phantomBaseProbability: 0.1,      // 假砖块基础生成概率
+    phantomMaxIncrement: 0.2,         // 假砖块最大概率增量
+    // 移除phantomGenerationInterval参数，不再基于帧数生成
+    phantomMinPerGeneration: 1,       // 每次生成的最小数量
+    phantomMaxPerGeneration: 3,       // 每次生成的最大数量
+    phantomYSpacing: 150,             // 高度生成间隔
     
     // 平台间距
-    basePlatformMinYSpacing: 60,      // 初始最小间距
+    basePlatformMinYSpacing: 30,      // 初始最小间距
     basePlatformMaxYSpacing: 200,     // 初始最大间距
-    maxPlatformMinYSpacing: 200,      // 最高难度最小间距
+    maxPlatformMinYSpacing: 60,       // 最高难度最小间距
     maxPlatformMaxYSpacing: 240,      // 最高难度最大间距
     
     // 移动平台速度
     movingPlatformBaseSpeed: 1,       // 移动平台基础速度
-    movingPlatformSpeedIncrement: 3   // 移动平台速度难度增量
+    movingPlatformSpeedIncrement: 3 // 移动平台速度难度增量
 };
 
 // 检测设备类型
@@ -122,6 +126,11 @@ let platforms = [];
 const platformWidth = 70;
 const platformHeight = 15;
 const initialPlatforms = 5; // 初始平台数量
+
+// 添加假砖块数组
+let phantomPlatforms = [];
+const phantomPlatformWidth = 70; // 与普通平台相同宽度
+const phantomPlatformHeight = 15; // 与普通平台相同高度
 
 // 游戏控制
 let keys = {};
@@ -301,6 +310,8 @@ function initMenu() {
     clouds = [];
     platforms = [];
     springs = []; // 清空弹簧数组
+    phantomPlatforms = []; // 清空假砖块数组
+    // 移除phantomGenerationTimer的重置
     
     // 添加角色动画相关状态
     playerMenuAnimation = {
@@ -767,12 +778,6 @@ function update(dt) {
                 }
             });
         }
-        
-        // 处理假砖块的消失动画
-        if (platform.type === 'fake' && platform.isBroken) {
-            platform.breakTimer--;
-            platform.alpha = platform.breakTimer / 30; // 逐渐变透明
-        }
     });
 
     // 更新弹簧状态
@@ -784,6 +789,22 @@ function update(dt) {
             }
         }
     });
+    
+    // 更新假砖块状态 - 破碎的假砖块逐渐消失
+    phantomPlatforms.forEach(platform => {
+        if (platform.isBroken) {
+            platform.fadeTimer++;
+            platform.opacity = Math.max(0, 1 - platform.fadeTimer / 20); // 20帧内完全消失
+            
+            // 完全消失后标记为移除
+            if (platform.fadeTimer >= 20) {
+                platform.opacity = 0;
+            }
+        }
+    });
+    
+    // 移除已消失的假砖块
+    phantomPlatforms = phantomPlatforms.filter(platform => platform.opacity > 0);
 
     // Collision Detection (Use Logical Dimensions)
     player.onGround = false;
@@ -832,6 +853,7 @@ function update(dt) {
         
         // 如果没有与弹簧碰撞，则检测与平台的碰撞
         if (!springCollision) {
+            // 先检测与真实平台的碰撞
             platforms.forEach(platform => {
                 // 调整玩家尺寸用于碰撞检测，基于BASE尺寸
                 const checkWidth = player.baseWidth;
@@ -845,19 +867,7 @@ function update(dt) {
                     checkY + checkHeight >= platform.y &&
                     checkY + checkHeight <= platform.y + platform.height + 10) 
                 {
-                    // 处理假砖块碰撞
-                    if (platform.type === 'fake') {
-                        // 假砖块立即破碎并且不提供跳跃
-                        platform.isBroken = true;
-                        platform.breakTimer = 30; // 30帧后消失
-                        // 不设置player.onGround，不改变玩家速度
-                        // 轻微晃动效果
-                        platform.shakeTimer = 5;
-                        platform.shakeAmount = 3;
-                        return; // 继续检查其他平台
-                    }
-                    
-                    // 落在普通平台上
+                    // 落在平台上
                     if (!player.isJumping) { // 仅在初次着陆时触发挤压，不是上跳时
                         player.squashTimer = player.squashDuration; // 启动挤压计时器
                     }
@@ -874,6 +884,33 @@ function update(dt) {
                     }
                 }
             });
+            
+            // 如果没有与真实平台碰撞，再检测与假砖块的碰撞
+            if (!player.onGround) {
+                phantomPlatforms.forEach(platform => {
+                    const checkWidth = player.baseWidth;
+                    const checkHeight = player.baseHeight;
+                    const checkX = player.x;
+                    const checkY = player.y;
+                    
+                    if (!platform.isBroken &&
+                        checkX < platform.x + platform.width &&
+                        checkX + checkWidth > platform.x &&
+                        checkY + checkHeight >= platform.y &&
+                        checkY + checkHeight <= platform.y + platform.height + 10)
+                    {
+                        // 触碰到假砖块，立即标记为破碎
+                        platform.isBroken = true;
+                        platform.fadeTimer = 0;
+                        
+                        // 不提供任何跳跃力，假砖块无法支撑玩家
+                        // 但可以添加轻微的减速效果，让玩家感觉有碰到东西
+                        if (player.vy > 5) { // 如果下落速度较快，稍微减缓
+                            player.vy *= 0.8;
+                        }
+                    }
+                });
+            }
         }
     } else {
          // 如果向上移动且不在地面，重置跳跃标志
@@ -894,6 +931,7 @@ function update(dt) {
         player.y = logicalHeight / 2;
         platforms.forEach(p => p.y += cameraOffset);
         springs.forEach(s => s.y += cameraOffset); // 更新弹簧位置
+        phantomPlatforms.forEach(p => p.y += cameraOffset); // 更新假砖块位置
         clouds.forEach(c => c.y += cameraOffset * 0.5); // Clouds scroll slower for parallax effect
         score += Math.round(cameraOffset);
     }
@@ -927,7 +965,7 @@ function update(dt) {
     const platformsToRemove = [];
     platforms.forEach((p, index) => {
         if (p.y >= logicalHeight || // 平台低于屏幕底部
-           ((p.type === 'breakable' || p.type === 'movingBreakable' || p.type === 'fake') && p.isBroken && p.breakTimer <= 0)) // 破碎平台计时结束
+           ((p.type === 'breakable' || p.type === 'movingBreakable') && p.isBroken && p.breakTimer <= 0)) // 破碎平台计时结束
         {
             platformsToRemove.push(index);
         }
@@ -953,6 +991,9 @@ function update(dt) {
             });
         });
     }
+    
+    // 移除超出屏幕底部的假砖块
+    phantomPlatforms = phantomPlatforms.filter(p => p.y < logicalHeight);
 
     // Generate New Platforms (Based on Logical Coordinates)
     let highestPlatformY = platforms.length > 0 ? Math.min(...platforms.map(p => p.y)) : logicalHeight;
@@ -965,29 +1006,18 @@ function update(dt) {
         let spacing = currentMinSpacing + Math.random() * (currentMaxSpacing - currentMinSpacing);
         let newY = highestPlatformY - spacing;
         createPlatform(Math.random() * (logicalWidth - platformWidth), newY);
+        
+        // 在这里为新的真实平台高度附近，尝试生成假砖块
+        createPhantomPlatform(newY - difficultyConfig.phantomYSpacing/2);
+        
         highestPlatformY = newY;
     }
     
-    // 随机生成假砖块
-    if (difficulty >= difficultyConfig.fakeThreshold) {
-        const fakeProb = difficultyConfig.fakeBaseProbability + 
-            difficultyConfig.fakeMaxIncrement * 
-            ((difficulty - difficultyConfig.fakeThreshold) / 
-            (1 - difficultyConfig.fakeThreshold));
-        
-        // 每帧有较小概率生成假砖块
-        if (Math.random() < fakeProb / 60) { // 除以60，假设约60fps，表示平均每秒检查的概率
-            createFakePlatform();
-        }
-    }
-
     // Game Over Condition (Based on Logical Height)
     if (player.y > logicalHeight) { // Game over as soon as player's top edge is below bottom
         gameover = true;
         gameState = 'gameover';
         console.log("Game Over! Score:", Math.floor(score / 100));
-        // 不再设置 gameLoopRunning = false
-        // gameLoopRunning = false; // 这一行导致了游戏重启的问题
     }
 
     // Difficulty Update - 修改难度计算和输出逻辑
@@ -1060,6 +1090,101 @@ function draw() {
         }
     });
     // --- End Background Clouds ---
+    
+    // --- 绘制假砖块 (在真实平台之前绘制，让真实平台覆盖在上面) ---
+    phantomPlatforms.forEach(platform => {
+        if (platform.y + platform.height > visibleLogicalTopY && platform.y < logicalHeight) {
+            const platformX = platform.x;
+            const platformY = platform.y;
+            const platformW = platform.width;
+            const platformH = platform.height;
+            const platformCornerRadius = 5;
+            const grassHeight = platformH * 0.4; // 与普通平台一致的草地高度比例
+            
+            // 设置透明度
+            ctx.globalAlpha = platform.isBroken ? (1 - platform.fadeTimer / 20) * 0.7 : 0.7;
+            
+            // 基础颜色 - 使用与普通平台相似但更浅的颜色，像海市蜃楼幻影
+            let grassColor = '#C8F5C8'; // 更浅的绿色（普通平台是#90EE90）
+            let soilColor = '#E0B285'; // 更浅的土色（普通平台是#CD853F）
+            
+            if (platform.isBroken) {
+                // 消失过程中转变为云状
+                // 不再绘制标准平台形状，而是绘制云状效果
+                const cloudProgress = platform.fadeTimer / 20; // 0到1的进度
+                
+                // 绘制散开的云团
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+                const centerX = platformX + platformW/2;
+                const centerY = platformY + platformH/2;
+                const scatterRadius = 15 + cloudProgress * 20; // 云朵散开的半径
+                
+                // 绘制5-6个随机散开的小云团
+                for (let i = 0; i < 6; i++) {
+                    const angle = (i / 6) * Math.PI * 2 + cloudProgress * 0.5;
+                    const distance = scatterRadius * (0.5 + 0.5 * Math.random());
+                    const x = centerX + Math.cos(angle) * distance;
+                    const y = centerY + Math.sin(angle) * distance;
+                    const size = (1 - cloudProgress * 0.7) * platformH * (0.4 + 0.3 * Math.random());
+                    
+                    ctx.beginPath();
+                    ctx.arc(x, y, size, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            } else {
+                // 未破碎状态 - 绘制类似普通平台但半透明的形状
+                
+                // 绘制土壤(下部分)
+                ctx.fillStyle = soilColor;
+                ctx.beginPath();
+                ctx.roundRect(platformX, platformY, platformW, platformH, platformCornerRadius);
+                ctx.fill();
+                
+                // 绘制草地(上部分)
+                ctx.fillStyle = grassColor;
+                ctx.beginPath();
+                ctx.roundRect(platformX, platformY, platformW, grassHeight, 
+                    [platformCornerRadius, platformCornerRadius, 0, 0]); // 只有上边缘是圆角
+                ctx.fill();
+                
+                // 添加轻微波动效果（海市蜃楼）
+                const shimmerTime = Date.now() / 1000;
+                const shimmerY = Math.sin(shimmerTime * 3 + platformX / 30) * 1.5;
+                
+                // 水平波纹线
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+                ctx.lineWidth = 0.8;
+                ctx.beginPath();
+                
+                for (let i = 0; i < 3; i++) {
+                    const yPos = platformY + platformH * (0.3 + i * 0.25) + shimmerY;
+                    ctx.moveTo(platformX, yPos);
+                    
+                    // 波浪线
+                    for (let x = 0; x <= platformW; x += 5) {
+                        const waveY = yPos + Math.sin((x + shimmerTime * 100) / 10) * 0.8;
+                        ctx.lineTo(platformX + x, waveY);
+                    }
+                }
+                ctx.stroke();
+                
+                // 添加一点闪烁效果
+                if (Math.random() < 0.05) {
+                    const sparkX = platformX + Math.random() * platformW;
+                    const sparkY = platformY + Math.random() * platformH;
+                    const sparkSize = 1 + Math.random() * 2;
+                    
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                    ctx.beginPath();
+                    ctx.arc(sparkX, sparkY, sparkSize, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+            
+            // 重置透明度
+            ctx.globalAlpha = 1.0;
+        }
+    });
 
     // --- Draw Platforms --- 
     platforms.forEach(platform => {
@@ -1070,14 +1195,6 @@ function draw() {
             const platformH = platform.height;
             const grassHeight = platformH * 0.4; // 草地高度为平台总高度的40%
             const platformCornerRadius = 5;
-            
-            // 保存当前上下文状态，以便正确恢复透明度
-            ctx.save();
-            
-            // 如果是假砖块且已破碎，应用透明度
-            if (platform.type === 'fake' && platform.isBroken) {
-                ctx.globalAlpha = platform.alpha;
-            }
             
             // 确定基础颜色 (将根据平台类型修改饱和度/亮度)
             let grassColor, soilColor;
@@ -1096,36 +1213,29 @@ function draw() {
                 // 移动+易碎平台 - 紫色
                 grassColor = '#E6A8D7'; // 淡紫色(顶部)
                 soilColor = '#9966CC'; // 中紫色(底部)
-            } else if (platform.type === 'fake') {
-                // 假砖块 - 红色系
-                grassColor = '#ff9999'; // 淡红色(顶部)
-                soilColor = '#cc6666'; // 深红色(底部)
             } else {
                 // 普通平台
                 grassColor = '#90EE90'; // 淡绿色草地
                 soilColor = '#CD853F'; // 秘鲁色土壤
             }
             
-            // 应用假砖块晃动效果
-            let drawX = platformX;
-            let drawY = platformY;
-            
-            if (platform.type === 'fake' && platform.shakeTimer > 0) {
-                platform.shakeTimer--;
-                const shakeOffset = platform.shakeAmount * (platform.shakeTimer / 5);
-                drawX += Math.random() * shakeOffset * 2 - shakeOffset;
-            }
+            // 不再绘制平台外轮廓（去掉黑边）
+            // ctx.strokeStyle = 'black';
+            // ctx.lineWidth = 2;
+            // ctx.beginPath();
+            // ctx.roundRect(platformX, platformY, platformW, platformH, platformCornerRadius);
+            // ctx.stroke();
             
             // 绘制土壤(下部分)
             ctx.fillStyle = soilColor;
             ctx.beginPath();
-            ctx.roundRect(drawX, drawY, platformW, platformH, platformCornerRadius);
+            ctx.roundRect(platformX, platformY, platformW, platformH, platformCornerRadius);
             ctx.fill();
             
             // 绘制草地(上部分)
             ctx.fillStyle = grassColor;
             ctx.beginPath();
-            ctx.roundRect(drawX, drawY, platformW, grassHeight, 
+            ctx.roundRect(platformX, platformY, platformW, grassHeight, 
                 [platformCornerRadius, platformCornerRadius, 0, 0]); // 只有上边缘是圆角
             ctx.fill();
             
@@ -1134,28 +1244,28 @@ function draw() {
             if (!platform.isBroken) {
                 ctx.fillStyle = 'rgba(0,0,0,0.1)';
                 ctx.beginPath();
-                ctx.moveTo(drawX + platformW * 0.2, drawY);
-                ctx.lineTo(drawX + platformW * 0.5, drawY + grassHeight);
-                ctx.lineTo(drawX, drawY + grassHeight);
+                ctx.moveTo(platformX + platformW * 0.2, platformY);
+                ctx.lineTo(platformX + platformW * 0.5, platformY + grassHeight);
+                ctx.lineTo(platformX, platformY + grassHeight);
                 ctx.closePath();
                 ctx.fill();
                 
                 // 草地高光三角形
                 ctx.fillStyle = 'rgba(255,255,255,0.15)';
                 ctx.beginPath();
-                ctx.moveTo(drawX + platformW * 0.6, drawY);
-                ctx.lineTo(drawX + platformW, drawY);
-                ctx.lineTo(drawX + platformW, drawY + grassHeight * 0.7);
+                ctx.moveTo(platformX + platformW * 0.6, platformY);
+                ctx.lineTo(platformX + platformW, platformY);
+                ctx.lineTo(platformX + platformW, platformY + grassHeight * 0.7);
                 ctx.closePath();
                 ctx.fill();
                 
                 // 土壤部分阴影
                 ctx.fillStyle = 'rgba(0,0,0,0.15)';
                 ctx.beginPath();
-                ctx.moveTo(drawX, drawY + grassHeight);
-                ctx.lineTo(drawX + platformW * 0.4, drawY + grassHeight);
-                ctx.lineTo(drawX + platformW * 0.2, drawY + platformH);
-                ctx.lineTo(drawX, drawY + platformH);
+                ctx.moveTo(platformX, platformY + grassHeight);
+                ctx.lineTo(platformX + platformW * 0.4, platformY + grassHeight);
+                ctx.lineTo(platformX + platformW * 0.2, platformY + platformH);
+                ctx.lineTo(platformX, platformY + platformH);
                 ctx.closePath();
                 ctx.fill();
             }
@@ -1169,78 +1279,44 @@ function draw() {
                 
                 // 几条冰块特有的线条
                 // 水平线
-                ctx.moveTo(drawX + platformW * 0.1, drawY + platformH * 0.3);
-                ctx.lineTo(drawX + platformW * 0.9, drawY + platformH * 0.3);
+                ctx.moveTo(platformX + platformW * 0.1, platformY + platformH * 0.3);
+                ctx.lineTo(platformX + platformW * 0.9, platformY + platformH * 0.3);
                 
                 // 垂直线
-                ctx.moveTo(drawX + platformW * 0.3, drawY + platformH * 0.1);
-                ctx.lineTo(drawX + platformW * 0.3, drawY + platformH * 0.7);
-                ctx.moveTo(drawX + platformW * 0.7, drawY + platformH * 0.2);
-                ctx.lineTo(drawX + platformW * 0.7, drawY + platformH * 0.9);
+                ctx.moveTo(platformX + platformW * 0.3, platformY + platformH * 0.1);
+                ctx.lineTo(platformX + platformW * 0.3, platformY + platformH * 0.7);
+                ctx.moveTo(platformX + platformW * 0.7, platformY + platformH * 0.2);
+                ctx.lineTo(platformX + platformW * 0.7, platformY + platformH * 0.9);
                 
                 // 斜线
-                ctx.moveTo(drawX + platformW * 0.2, drawY + platformH * 0.2);
-                ctx.lineTo(drawX + platformW * 0.5, drawY + platformH * 0.6);
+                ctx.moveTo(platformX + platformW * 0.2, platformY + platformH * 0.2);
+                ctx.lineTo(platformX + platformW * 0.5, platformY + platformH * 0.6);
                 ctx.stroke();
                 
                 // 增加一些冰块光泽
                 ctx.fillStyle = platform.type === 'breakable' ? 'rgba(255, 255, 255, 0.3)' : 'rgba(255, 240, 255, 0.3)';
                 ctx.beginPath();
-                ctx.ellipse(drawX + platformW * 0.7, drawY + platformH * 0.25, 
+                ctx.ellipse(platformX + platformW * 0.7, platformY + platformH * 0.25, 
                            platformW * 0.15, platformH * 0.2, 0, 0, Math.PI * 2);
                 ctx.fill();
             }
             
-            // 假砖块特殊图案 - 添加警告标记
-            if (platform.type === 'fake' && !platform.isBroken) {
-                // 绘制标记 - 小X图案
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
-                ctx.lineWidth = 2;
-                
-                // X标记
-                const margin = platformW * 0.15;
-                const centerX = drawX + platformW / 2;
-                const centerY = drawY + platformH / 2;
-                const size = platformW * 0.25;
-                
-                ctx.beginPath();
-                // X线
-                ctx.moveTo(centerX - size, centerY - size);
-                ctx.lineTo(centerX + size, centerY + size);
-                ctx.moveTo(centerX + size, centerY - size);
-                ctx.lineTo(centerX - size, centerY + size);
-                ctx.stroke();
-                
-                // 添加闪烁效果
-                const flashRate = Math.floor(Date.now() / 200) % 8; // 闪烁频率
-                if (flashRate < 4) {
-                    // 绘制闪烁的小圆点
-                    ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-                    ctx.beginPath();
-                    ctx.arc(centerX, centerY, 3, 0, Math.PI * 2);
-                    ctx.fill();
-                }
-            }
-            
             // 已破碎平台的裂缝
-            if ((platform.type === 'breakable' || platform.type === 'movingBreakable' || platform.type === 'fake') && platform.isBroken) {
-                const crackColor = platform.type === 'fake' ? 'rgba(255, 200, 200, 0.9)' : // 假砖块裂缝
-                                  (platform.type === 'breakable' ? 'rgba(255, 255, 255, 0.9)' : 'rgba(255, 240, 255, 0.9)');
-                
-                // 裂缝效果
-                ctx.strokeStyle = crackColor;
+            if ((platform.type === 'breakable' || platform.type === 'movingBreakable') && platform.isBroken) {
+                // 冰块破碎效果
+                ctx.strokeStyle = platform.type === 'breakable' ? 'rgba(255, 255, 255, 0.9)' : 'rgba(255, 240, 255, 0.9)';
                 ctx.lineWidth = 2;
                 ctx.beginPath();
-                ctx.moveTo(drawX + 5, drawY + platformH / 2);
-                ctx.lineTo(drawX + platformW - 5, drawY + platformH / 2);
+                ctx.moveTo(platformX + 5, platformY + platformH / 2);
+                ctx.lineTo(platformX + platformW - 5, platformY + platformH / 2);
                 ctx.stroke();
                 
-                // 添加额外裂缝 - 放射样式
+                // 添加额外裂缝 - 冰裂样式
                 ctx.lineWidth = 1;
                 ctx.beginPath();
                 // 放射状裂纹
-                const centerX = drawX + platformW/2;
-                const centerY = drawY + platformH/2;
+                const centerX = platformX + platformW/2;
+                const centerY = platformY + platformH/2;
                 
                 // 多条放射线
                 for (let angle = 0; angle < Math.PI*2; angle += Math.PI/4) {
@@ -1251,9 +1327,6 @@ function draw() {
                 }
                 ctx.stroke();
             }
-            
-            // 恢复上下文状态，包括透明度
-            ctx.restore();
         }
     });
     // --- End Platforms --- 
@@ -1495,189 +1568,51 @@ function drawMenu() {
             const grassHeight = platformH * 0.4;
             const platformCornerRadius = 5;
             
-            // 保存当前上下文状态，以便正确恢复透明度
-            ctx.save();
-            
-            // 如果是假砖块且已破碎，应用透明度
-            if (platform.type === 'fake' && platform.isBroken) {
-                ctx.globalAlpha = platform.alpha;
-            }
-            
-            // 确定基础颜色 (将根据平台类型修改饱和度/亮度)
-            let grassColor, soilColor;
-            
-            if (platform.isBroken) {
-                grassColor = '#aaa';
-                soilColor = '#999';
-            } else if (platform.type === 'moving') {
-                grassColor = '#8FBC8F'; // 暗海洋绿(草地部分)
-                soilColor = '#5F9EA0'; // 保留轻鸭绿色(土壤部分)
-            } else if (platform.type === 'breakable') {
-                // 冰块风格 - 淡蓝色+白色
-                grassColor = '#A5F2F3'; // 浅蓝色(冰块顶部)
-                soilColor = '#77C5D5'; // 稍深蓝色(冰块底部)
-            } else if (platform.type === 'movingBreakable') {
-                // 移动+易碎平台 - 紫色
-                grassColor = '#E6A8D7'; // 淡紫色(顶部)
-                soilColor = '#9966CC'; // 中紫色(底部)
-            } else if (platform.type === 'fake') {
-                // 假砖块 - 红色系
-                grassColor = '#ff9999'; // 淡红色(顶部)
-                soilColor = '#cc6666'; // 深红色(底部)
-            } else {
-                // 普通平台
-                grassColor = '#90EE90'; // 淡绿色草地
-                soilColor = '#CD853F'; // 秘鲁色土壤
-            }
-            
-            // 应用假砖块晃动效果
-            let drawX = platformX;
-            let drawY = platformY;
-            
-            if (platform.type === 'fake' && platform.shakeTimer > 0) {
-                platform.shakeTimer--;
-                const shakeOffset = platform.shakeAmount * (platform.shakeTimer / 5);
-                drawX += Math.random() * shakeOffset * 2 - shakeOffset;
-            }
+            // 确定基础颜色
+            let grassColor = '#90EE90'; // 淡绿色草地
+            let soilColor = '#CD853F'; // 秘鲁色土壤
             
             // 绘制土壤(下部分)
             ctx.fillStyle = soilColor;
             ctx.beginPath();
-            ctx.roundRect(drawX, drawY, platformW, platformH, platformCornerRadius);
+            ctx.roundRect(platformX, platformY, platformW, platformH, platformCornerRadius);
             ctx.fill();
             
             // 绘制草地(上部分)
             ctx.fillStyle = grassColor;
             ctx.beginPath();
-            ctx.roundRect(drawX, drawY, platformW, grassHeight, 
-                [platformCornerRadius, platformCornerRadius, 0, 0]); // 只有上边缘是圆角
+            ctx.roundRect(platformX, platformY, platformW, grassHeight, 
+                [platformCornerRadius, platformCornerRadius, 0, 0]);
             ctx.fill();
             
             // 绘制低多边形效果(简化版)
             // 草地阴影三角形
-            if (!platform.isBroken) {
-                ctx.fillStyle = 'rgba(0,0,0,0.1)';
-                ctx.beginPath();
-                ctx.moveTo(drawX + platformW * 0.2, drawY);
-                ctx.lineTo(drawX + platformW * 0.5, drawY + grassHeight);
-                ctx.lineTo(drawX, drawY + grassHeight);
-                ctx.closePath();
-                ctx.fill();
-                
-                // 草地高光三角形
-                ctx.fillStyle = 'rgba(255,255,255,0.15)';
-                ctx.beginPath();
-                ctx.moveTo(drawX + platformW * 0.6, drawY);
-                ctx.lineTo(drawX + platformW, drawY);
-                ctx.lineTo(drawX + platformW, drawY + grassHeight * 0.7);
-                ctx.closePath();
-                ctx.fill();
-                
-                // 土壤部分阴影
-                ctx.fillStyle = 'rgba(0,0,0,0.15)';
-                ctx.beginPath();
-                ctx.moveTo(drawX, drawY + grassHeight);
-                ctx.lineTo(drawX + platformW * 0.4, drawY + grassHeight);
-                ctx.lineTo(drawX + platformW * 0.2, drawY + platformH);
-                ctx.lineTo(drawX, drawY + platformH);
-                ctx.closePath();
-                ctx.fill();
-            }
+            ctx.fillStyle = 'rgba(0,0,0,0.1)';
+            ctx.beginPath();
+            ctx.moveTo(platformX + platformW * 0.2, platformY);
+            ctx.lineTo(platformX + platformW * 0.5, platformY + grassHeight);
+            ctx.lineTo(platformX, platformY + grassHeight);
+            ctx.closePath();
+            ctx.fill();
             
-            // 易碎平台的裂纹 - 冰块效果
-            if (platform.type === 'breakable' || platform.type === 'movingBreakable') {
-                // 给冰块添加裂纹和高光效果
-                ctx.strokeStyle = platform.type === 'breakable' ? 'rgba(255, 255, 255, 0.7)' : 'rgba(255, 240, 255, 0.7)';
-                ctx.lineWidth = 1;
-                ctx.beginPath();
-                
-                // 几条冰块特有的线条
-                // 水平线
-                ctx.moveTo(drawX + platformW * 0.1, drawY + platformH * 0.3);
-                ctx.lineTo(drawX + platformW * 0.9, drawY + platformH * 0.3);
-                
-                // 垂直线
-                ctx.moveTo(drawX + platformW * 0.3, drawY + platformH * 0.1);
-                ctx.lineTo(drawX + platformW * 0.3, drawY + platformH * 0.7);
-                ctx.moveTo(drawX + platformW * 0.7, drawY + platformH * 0.2);
-                ctx.lineTo(drawX + platformW * 0.7, drawY + platformH * 0.9);
-                
-                // 斜线
-                ctx.moveTo(drawX + platformW * 0.2, drawY + platformH * 0.2);
-                ctx.lineTo(drawX + platformW * 0.5, drawY + platformH * 0.6);
-                ctx.stroke();
-                
-                // 增加一些冰块光泽
-                ctx.fillStyle = platform.type === 'breakable' ? 'rgba(255, 255, 255, 0.3)' : 'rgba(255, 240, 255, 0.3)';
-                ctx.beginPath();
-                ctx.ellipse(drawX + platformW * 0.7, drawY + platformH * 0.25, 
-                           platformW * 0.15, platformH * 0.2, 0, 0, Math.PI * 2);
-                ctx.fill();
-            }
+            // 草地高光三角形
+            ctx.fillStyle = 'rgba(255,255,255,0.15)';
+            ctx.beginPath();
+            ctx.moveTo(platformX + platformW * 0.6, platformY);
+            ctx.lineTo(platformX + platformW, platformY);
+            ctx.lineTo(platformX + platformW, platformY + grassHeight * 0.7);
+            ctx.closePath();
+            ctx.fill();
             
-            // 假砖块特殊图案 - 添加警告标记
-            if (platform.type === 'fake' && !platform.isBroken) {
-                // 绘制标记 - 小X图案
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
-                ctx.lineWidth = 2;
-                
-                // X标记
-                const margin = platformW * 0.15;
-                const centerX = drawX + platformW / 2;
-                const centerY = drawY + platformH / 2;
-                const size = platformW * 0.25;
-                
-                ctx.beginPath();
-                // X线
-                ctx.moveTo(centerX - size, centerY - size);
-                ctx.lineTo(centerX + size, centerY + size);
-                ctx.moveTo(centerX + size, centerY - size);
-                ctx.lineTo(centerX - size, centerY + size);
-                ctx.stroke();
-                
-                // 添加闪烁效果
-                const flashRate = Math.floor(Date.now() / 200) % 8; // 闪烁频率
-                if (flashRate < 4) {
-                    // 绘制闪烁的小圆点
-                    ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-                    ctx.beginPath();
-                    ctx.arc(centerX, centerY, 3, 0, Math.PI * 2);
-                    ctx.fill();
-                }
-            }
-            
-            // 已破碎平台的裂缝
-            if ((platform.type === 'breakable' || platform.type === 'movingBreakable' || platform.type === 'fake') && platform.isBroken) {
-                const crackColor = platform.type === 'fake' ? 'rgba(255, 200, 200, 0.9)' : // 假砖块裂缝
-                                  (platform.type === 'breakable' ? 'rgba(255, 255, 255, 0.9)' : 'rgba(255, 240, 255, 0.9)');
-                
-                // 裂缝效果
-                ctx.strokeStyle = crackColor;
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                ctx.moveTo(drawX + 5, drawY + platformH / 2);
-                ctx.lineTo(drawX + platformW - 5, drawY + platformH / 2);
-                ctx.stroke();
-                
-                // 添加额外裂缝 - 放射样式
-                ctx.lineWidth = 1;
-                ctx.beginPath();
-                // 放射状裂纹
-                const centerX = drawX + platformW/2;
-                const centerY = drawY + platformH/2;
-                
-                // 多条放射线
-                for (let angle = 0; angle < Math.PI*2; angle += Math.PI/4) {
-                    const endX = centerX + Math.cos(angle) * platformW * 0.4;
-                    const endY = centerY + Math.sin(angle) * platformH * 0.4;
-                    ctx.moveTo(centerX, centerY);
-                    ctx.lineTo(endX, endY);
-                }
-                ctx.stroke();
-            }
-            
-            // 恢复上下文状态，包括透明度
-            ctx.restore();
+            // 土壤部分阴影
+            ctx.fillStyle = 'rgba(0,0,0,0.15)';
+            ctx.beginPath();
+            ctx.moveTo(platformX, platformY + grassHeight);
+            ctx.lineTo(platformX + platformW * 0.4, platformY + grassHeight);
+            ctx.lineTo(platformX + platformW * 0.2, platformY + platformH);
+            ctx.lineTo(platformX, platformY + platformH);
+            ctx.closePath();
+            ctx.fill();
         }
     });
     
@@ -2230,76 +2165,70 @@ function handleSafeAreas() {
     rightEdgeWidth = edgeWidth + safeAreaRight;
 }
 
-// 创建假砖块
-function createFakePlatform() {
-    // 获取最高平台的位置（作为参考点）
-    let highestPlatformY = platforms.length > 0 ? Math.min(...platforms.map(p => p.y)) : logicalHeight;
-    
-    // 确保水平位置随机但在屏幕范围内
-    const x = Math.random() * (logicalWidth - platformWidth);
-    
-    // 在最高平台附近随机生成，避免妨碍玩家主要路径
-    // 要么在最高平台附近的侧面生成，要么在略高于最高平台处生成
-    let y;
-    
-    if (Math.random() < 0.5) {
-        // 在最高平台的同一高度附近生成，但水平错开
-        // 找到接近最高点的几个平台
-        const nearTopPlatforms = platforms
-            .filter(p => p.y < highestPlatformY + 100)
-            .sort((a, b) => a.y - b.y)
-            .slice(0, 3); // 取最高的3个平台
-        
-        // 确保假砖块的水平位置与这些平台有足够距离
-        let validPosition = false;
-        let attempts = 0;
-        let newX = x;
-        
-        while (!validPosition && attempts < 10) {
-            validPosition = true;
-            newX = Math.random() * (logicalWidth - platformWidth);
-            
-            for (const platform of nearTopPlatforms) {
-                // 检查水平距离是否太近
-                if (Math.abs(newX - platform.x) < platformWidth * 0.8) {
-                    validPosition = false;
-                    break;
-                }
-            }
-            
-            attempts++;
-        }
-        
-        // 使用验证过的水平位置
-        const nearestPlatform = nearTopPlatforms[0];
-        y = nearestPlatform ? nearestPlatform.y + (Math.random() * 30 - 15) : highestPlatformY;
-        x = newX;
-    } else {
-        // 在现有最高平台上方一小段距离处生成
-        y = highestPlatformY - (30 + Math.random() * 50);
-        
-        // 确保在屏幕边缘更容易出现，不在主要上升路径
-        if (Math.random() < 0.7) {
-            // 70%概率靠近屏幕边缘
-            x = Math.random() < 0.5 ? 
-                Math.random() * platformWidth : // 左边缘
-                logicalWidth - platformWidth - Math.random() * platformWidth; // 右边缘
-        }
+// 创建假砖块函数 - 修改为接受高度参数
+function createPhantomPlatform(targetY) {
+    // 只有当难度达到指定阈值才生成假砖块
+    if (difficulty < difficultyConfig.phantomThreshold) {
+        return;
     }
     
-    // 创建假砖块
-    const fakePlatform = {
-        x: x,
-        y: y,
-        width: platformWidth,
-        height: platformHeight,
-        type: 'fake',
-        isBroken: false,
-        vx: 0,
-        direction: 1,
-        breakTimer: 0,
-        alpha: 1.0 // 用于消失动画
-    };
+    // 计算当前生成概率
+    const phantomProb = difficultyConfig.phantomBaseProbability + 
+        difficultyConfig.phantomMaxIncrement * 
+        ((difficulty - difficultyConfig.phantomThreshold) / 
+        (1 - difficultyConfig.phantomThreshold));
     
-    platforms.push(fakePlatform);
+    // 随机决定是否生成假砖块
+    if (Math.random() > phantomProb) {
+        return;
+    }
+    
+    // 确定本次生成数量
+    const generateCount = Math.floor(Math.random() * 
+        (difficultyConfig.phantomMaxPerGeneration - difficultyConfig.phantomMinPerGeneration + 1)) + 
+        difficultyConfig.phantomMinPerGeneration;
+    
+    // 生成多个假砖块
+    for (let i = 0; i < generateCount; i++) {
+        // 确定生成位置 - 在指定的高度附近生成
+        const minY = targetY - 40; // 高度范围上限
+        const maxY = targetY + 40; // 高度范围下限
+        
+        const randomY = minY + Math.random() * (maxY - minY);
+        const randomX = Math.random() * (logicalWidth - phantomPlatformWidth);
+        
+        // 避免在真实平台附近生成假砖块
+        let tooClose = false;
+        platforms.forEach(platform => {
+            const distX = Math.abs((randomX + phantomPlatformWidth/2) - (platform.x + platform.width/2));
+            const distY = Math.abs(randomY - platform.y);
+            
+            if (distX < platformWidth * 1.5 && distY < platformHeight * 6) {
+                tooClose = true;
+            }
+        });
+        
+        // 避免与已存在的假砖块重叠
+        phantomPlatforms.forEach(phantom => {
+            const distX = Math.abs((randomX + phantomPlatformWidth/2) - (phantom.x + phantom.width/2));
+            const distY = Math.abs(randomY - phantom.y);
+            
+            if (distX < phantomPlatformWidth && distY < phantomPlatformHeight * 3) {
+                tooClose = true;
+            }
+        });
+        
+        if (!tooClose) {
+            // 创建假砖块对象
+            phantomPlatforms.push({
+                x: randomX,
+                y: randomY,
+                width: phantomPlatformWidth,
+                height: phantomPlatformHeight,
+                isBroken: false,
+                fadeTimer: 0,
+                opacity: 1.0
+            });
+        }
+    }
 }
