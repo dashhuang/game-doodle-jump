@@ -8,11 +8,11 @@ const difficultyConfig = {
     
     // 平台类型阈值
     movingThreshold: 0.2,             // 移动平台出现的难度阈值
-    breakableThreshold: 0.5,          // 易碎平台出现的难度阈值
+    breakableThreshold: 0.4,          // 易碎平台出现的难度阈值
     movingBreakableThreshold: 0.7,    // 移动易碎平台出现的难度阈值
     springThreshold: 0.0,             // 弹簧道具出现的难度阈值（从游戏开始就有，但概率会随难度增加）
     phantomThreshold: 0.0,            // 假砖块出现的难度阈值
-    verticalMovingThreshold: 0.0,     // 上下移动平台出现的难度阈值
+    verticalMovingThreshold: 0.6,     // 上下移动平台出现的难度阈值
     
     // 平台出现概率
     springBaseProbability: 0.08,      // 弹簧道具基础概率
@@ -31,13 +31,13 @@ const difficultyConfig = {
     // 上下移动平台参数
     verticalMovingBaseProbability: 0.08,  // 上下移动平台基础概率
     verticalMovingMaxIncrement: 0.15,     // 上下移动平台最大概率增量
-    verticalMovingBaseSpeed: 0.8,         // 上下移动平台基础速度
-    verticalMovingSpeedIncrement: 1.5,    // 上下移动平台速度难度增量
-    verticalMovingRange: 100,             // 上下移动平台的移动范围（像素）
+    verticalMovingBaseSpeed: 0.5,         // 上下移动平台基础速度，减小以使移动更平滑
+    verticalMovingSpeedIncrement: 0.8,    // 上下移动平台速度难度增量
+    verticalMovingRange: 80,             // 上下移动平台的移动范围（像素）
     
     // 假砖块生成参数
     phantomBaseProbability: 0.1,      // 假砖块基础生成概率
-    phantomMaxIncrement: 0.1,         // 假砖块最大概率增量
+    phantomMaxIncrement: 0.2,         // 假砖块最大概率增量
     // 移除phantomGenerationInterval参数，不再基于帧数生成
     phantomMinPerGeneration: 1,       // 每次生成的最小数量
     phantomMaxPerGeneration: 3,       // 每次生成的最大数量
@@ -481,14 +481,13 @@ function createPlatform(x, y, forcedType = null) {
     }
     else if (platform.type === 'verticalMoving') {
         platform.vy = difficultyConfig.verticalMovingBaseSpeed + difficulty * difficultyConfig.verticalMovingSpeedIncrement;
-        // 改为偏向向上移动开始，使用-1表示向上运动
-        platform.verticalDirection = -1;
         
-        // 初始化时随机设置初始位置在运动范围内的某个点
-        // 这可以使各个平台处于不同的运动周期，避免所有平台同时上下移动
-        const randomOffset = Math.random() * platform.verticalRange - platform.verticalRange / 2;
-        platform.y += randomOffset;
-        platform.initialY = y; // 保持原始初始Y位置不变，作为参考点
+        // 设置初始位置和运动参考点
+        platform.initialY = y;
+        platform.verticalRange = difficultyConfig.verticalMovingRange;
+        
+        // 随机初始方向
+        platform.verticalDirection = Math.random() < 0.5 ? -1 : 1;
     }
     platforms.push(platform);
     
@@ -822,11 +821,9 @@ function update(dt) {
             
             // 计算距离初始位置的距离，超过范围则反向
             const distanceFromInitial = Math.abs(platform.y - platform.initialY);
-            if (distanceFromInitial >= platform.verticalRange / 2) {
+            if (distanceFromInitial > difficultyConfig.verticalMovingRange / 2) {
                 platform.verticalDirection *= -1;
-                
-                // 调试输出
-                console.log(`平台反向：位置=${platform.y.toFixed(1)}, 初始=${platform.initialY.toFixed(1)}, 距离=${distanceFromInitial.toFixed(1)}, 方向=${platform.verticalDirection}`);
+                console.log(`平台改变方向：位置=${platform.y.toFixed(1)}, 初始=${platform.initialY.toFixed(1)}, 距离=${distanceFromInitial.toFixed(1)}, 方向=${platform.verticalDirection}`);
             }
             
             // 更新该平台上的弹簧位置
@@ -987,7 +984,13 @@ function update(dt) {
     if (player.y < logicalHeight / 2) { // Check against logical midpoint
         cameraOffset = logicalHeight / 2 - player.y;
         player.y = logicalHeight / 2;
-        platforms.forEach(p => p.y += cameraOffset);
+        platforms.forEach(p => {
+            p.y += cameraOffset;
+            // 上下移动平台的初始位置也需要随着相机滚动更新
+            if (p.type === 'verticalMoving') {
+                p.initialY += cameraOffset;
+            }
+        });
         springs.forEach(s => s.y += cameraOffset); // 更新弹簧位置
         phantomPlatforms.forEach(p => p.y += cameraOffset); // 更新假砖块位置
         clouds.forEach(c => c.y += cameraOffset * 0.5); // Clouds scroll slower for parallax effect
