@@ -12,6 +12,7 @@ const difficultyConfig = {
     movingBreakableThreshold: 0.7,    // 移动易碎平台出现的难度阈值
     springThreshold: 0.0,             // 弹簧道具出现的难度阈值（从游戏开始就有，但概率会随难度增加）
     phantomThreshold: 0.0,            // 假砖块出现的难度阈值
+    verticalMovingThreshold: 0.3,     // 上下移动平台出现的难度阈值
     
     // 平台出现概率
     springBaseProbability: 0.08,      // 弹簧道具基础概率
@@ -27,9 +28,16 @@ const difficultyConfig = {
     movingBreakableBaseProbability: 0.05, // 移动易碎平台基础概率
     movingBreakableMaxIncrement: 0.5,     // 移动易碎平台最大概率增量
     
+    // 上下移动平台参数
+    verticalMovingBaseProbability: 0.08,  // 上下移动平台基础概率
+    verticalMovingMaxIncrement: 0.15,     // 上下移动平台最大概率增量
+    verticalMovingBaseSpeed: 0.8,         // 上下移动平台基础速度
+    verticalMovingSpeedIncrement: 1.5,    // 上下移动平台速度难度增量
+    verticalMovingRange: 100,             // 上下移动平台的移动范围（像素）
+    
     // 假砖块生成参数
     phantomBaseProbability: 0.1,      // 假砖块基础生成概率
-    phantomMaxIncrement: 0.2,         // 假砖块最大概率增量
+    phantomMaxIncrement: 0.1,         // 假砖块最大概率增量
     // 移除phantomGenerationInterval参数，不再基于帧数生成
     phantomMinPerGeneration: 1,       // 每次生成的最小数量
     phantomMaxPerGeneration: 3,       // 每次生成的最大数量
@@ -393,6 +401,7 @@ function createPlatform(x, y, forcedType = null) {
         let movingProb = 0;
         let breakableProb = 0;
         let movingBreakableProb = 0;
+        let verticalMovingProb = 0;
         
         // 移动平台概率计算
         if (difficulty >= difficultyConfig.movingThreshold) {
@@ -418,6 +427,14 @@ function createPlatform(x, y, forcedType = null) {
                 (1 - difficultyConfig.movingBreakableThreshold));
         }
         
+        // 上下移动平台概率计算
+        if (difficulty >= difficultyConfig.verticalMovingThreshold) {
+            verticalMovingProb = difficultyConfig.verticalMovingBaseProbability + 
+                difficultyConfig.verticalMovingMaxIncrement * 
+                ((difficulty - difficultyConfig.verticalMovingThreshold) / 
+                (1 - difficultyConfig.verticalMovingThreshold));
+        }
+        
         // 根据随机值和计算出的概率确定平台类型（按优先级顺序判断）
         let probSum = 0;
         
@@ -433,6 +450,10 @@ function createPlatform(x, y, forcedType = null) {
         else if (rand < (probSum += breakableProb) + movingProb && difficulty >= difficultyConfig.movingThreshold) {
             type = 'moving';
         }
+        // 上下移动平台判断
+        else if (rand < (probSum += movingProb) + verticalMovingProb && difficulty >= difficultyConfig.verticalMovingThreshold) {
+            type = 'verticalMoving';
+        }
         // 默认普通平台
         else {
             type = 'normal';
@@ -446,12 +467,21 @@ function createPlatform(x, y, forcedType = null) {
         type: forcedType || type,
         isBroken: false,
         vx: 0,
+        vy: 0,
         direction: 1,
-        breakTimer: 0 // 添加：破碎后的消失计时器
+        verticalDirection: 1,
+        breakTimer: 0, // 添加：破碎后的消失计时器
+        // 上下移动平台额外属性
+        initialY: y,
+        verticalRange: difficultyConfig.verticalMovingRange
     };
     if (platform.type === 'moving' || platform.type === 'movingBreakable') {
         platform.vx = difficultyConfig.movingPlatformBaseSpeed + difficulty * difficultyConfig.movingPlatformSpeedIncrement;
         platform.direction = Math.random() < 0.5 ? 1 : -1;
+    }
+    else if (platform.type === 'verticalMoving') {
+        platform.vy = difficultyConfig.verticalMovingBaseSpeed + difficulty * difficultyConfig.verticalMovingSpeedIncrement;
+        platform.verticalDirection = Math.random() < 0.5 ? 1 : -1;
     }
     platforms.push(platform);
     
@@ -775,6 +805,24 @@ function update(dt) {
             springs.forEach(spring => {
                 if (spring.platformIndex === index) {
                     spring.x += platform.x - prevX;
+                }
+            });
+        }
+        // 处理上下移动平台
+        else if (platform.type === 'verticalMoving') {
+            const prevY = platform.y;
+            platform.y += platform.vy * platform.verticalDirection;
+            
+            // 计算距离初始位置的距离，超过范围则反向
+            const distanceFromInitial = Math.abs(platform.y - platform.initialY);
+            if (distanceFromInitial >= platform.verticalRange / 2) {
+                platform.verticalDirection *= -1;
+            }
+            
+            // 更新该平台上的弹簧位置
+            springs.forEach(spring => {
+                if (spring.platformIndex === index) {
+                    spring.y += platform.y - prevY;
                 }
             });
         }
@@ -1205,6 +1253,9 @@ function draw() {
             } else if (platform.type === 'moving') {
                 grassColor = '#8FBC8F'; // 暗海洋绿(草地部分)
                 soilColor = '#5F9EA0'; // 保留轻鸭绿色(土壤部分)
+            } else if (platform.type === 'verticalMoving') {
+                grassColor = '#FFA07A'; // 亮橙色(草地部分)
+                soilColor = '#CD853F'; // 标准土壤颜色但更深
             } else if (platform.type === 'breakable') {
                 // 冰块风格 - 淡蓝色+白色
                 grassColor = '#A5F2F3'; // 浅蓝色(冰块顶部)
@@ -1268,6 +1319,40 @@ function draw() {
                 ctx.lineTo(platformX, platformY + platformH);
                 ctx.closePath();
                 ctx.fill();
+            }
+            
+            // 为上下移动平台添加特殊标记
+            if (platform.type === 'verticalMoving' && !platform.isBroken) {
+                // 绘制上下箭头标记
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+                
+                // 上箭头
+                ctx.beginPath();
+                const arrowSize = platformW * 0.15;
+                const centerX = platformX + platformW / 2;
+                
+                // 上箭头
+                ctx.moveTo(centerX, platformY + platformH * 0.2);
+                ctx.lineTo(centerX - arrowSize, platformY + platformH * 0.4);
+                ctx.lineTo(centerX + arrowSize, platformY + platformH * 0.4);
+                ctx.closePath();
+                ctx.fill();
+                
+                // 下箭头
+                ctx.beginPath();
+                ctx.moveTo(centerX, platformY + platformH * 0.8);
+                ctx.lineTo(centerX - arrowSize, platformY + platformH * 0.6);
+                ctx.lineTo(centerX + arrowSize, platformY + platformH * 0.6);
+                ctx.closePath();
+                ctx.fill();
+                
+                // 连接线
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(centerX, platformY + platformH * 0.4);
+                ctx.lineTo(centerX, platformY + platformH * 0.6);
+                ctx.stroke();
             }
             
             // 易碎平台的裂纹 - 冰块效果
