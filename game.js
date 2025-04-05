@@ -12,7 +12,7 @@ const difficultyConfig = {
     movingBreakableThreshold: 0.7,    // 移动易碎平台出现的难度阈值
     springThreshold: 0.0,             // 弹簧道具出现的难度阈值（从游戏开始就有，但概率会随难度增加）
     phantomThreshold: 0.0,            // 假砖块出现的难度阈值
-    verticalMovingThreshold: 0.3,     // 上下移动平台出现的难度阈值
+    verticalMovingThreshold: 0.0,     // 上下移动平台出现的难度阈值
     
     // 平台出现概率
     springBaseProbability: 0.08,      // 弹簧道具基础概率
@@ -481,7 +481,14 @@ function createPlatform(x, y, forcedType = null) {
     }
     else if (platform.type === 'verticalMoving') {
         platform.vy = difficultyConfig.verticalMovingBaseSpeed + difficulty * difficultyConfig.verticalMovingSpeedIncrement;
-        platform.verticalDirection = Math.random() < 0.5 ? 1 : -1;
+        // 改为偏向向上移动开始，使用-1表示向上运动
+        platform.verticalDirection = -1;
+        
+        // 初始化时随机设置初始位置在运动范围内的某个点
+        // 这可以使各个平台处于不同的运动周期，避免所有平台同时上下移动
+        const randomOffset = Math.random() * platform.verticalRange - platform.verticalRange / 2;
+        platform.y += randomOffset;
+        platform.initialY = y; // 保持原始初始Y位置不变，作为参考点
     }
     platforms.push(platform);
     
@@ -817,6 +824,9 @@ function update(dt) {
             const distanceFromInitial = Math.abs(platform.y - platform.initialY);
             if (distanceFromInitial >= platform.verticalRange / 2) {
                 platform.verticalDirection *= -1;
+                
+                // 调试输出
+                console.log(`平台反向：位置=${platform.y.toFixed(1)}, 初始=${platform.initialY.toFixed(1)}, 距离=${distanceFromInitial.toFixed(1)}, 方向=${platform.verticalDirection}`);
             }
             
             // 更新该平台上的弹簧位置
@@ -1326,19 +1336,23 @@ function draw() {
                 // 绘制上下箭头标记
                 ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
                 
-                // 上箭头
-                ctx.beginPath();
+                // 根据当前运动方向，加强对应的箭头效果
+                const upArrowOpacity = platform.verticalDirection < 0 ? 0.9 : 0.5;
+                const downArrowOpacity = platform.verticalDirection > 0 ? 0.9 : 0.5;
                 const arrowSize = platformW * 0.15;
                 const centerX = platformX + platformW / 2;
                 
-                // 上箭头
+                // 上箭头 - 调整透明度
+                ctx.fillStyle = `rgba(255, 255, 255, ${upArrowOpacity})`;
+                ctx.beginPath();
                 ctx.moveTo(centerX, platformY + platformH * 0.2);
                 ctx.lineTo(centerX - arrowSize, platformY + platformH * 0.4);
                 ctx.lineTo(centerX + arrowSize, platformY + platformH * 0.4);
                 ctx.closePath();
                 ctx.fill();
                 
-                // 下箭头
+                // 下箭头 - 调整透明度
+                ctx.fillStyle = `rgba(255, 255, 255, ${downArrowOpacity})`;
                 ctx.beginPath();
                 ctx.moveTo(centerX, platformY + platformH * 0.8);
                 ctx.lineTo(centerX - arrowSize, platformY + platformH * 0.6);
@@ -1352,6 +1366,27 @@ function draw() {
                 ctx.beginPath();
                 ctx.moveTo(centerX, platformY + platformH * 0.4);
                 ctx.lineTo(centerX, platformY + platformH * 0.6);
+                ctx.stroke();
+                
+                // 添加平台当前运动的波纹效果
+                const waveOffset = platform.verticalDirection < 0 ? -3 : 3;
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                
+                // 绘制几条波浪线，显示移动方向
+                for (let i = 0; i < 3; i++) {
+                    const yPos = platform.verticalDirection < 0 ? 
+                                platformY + platformH + i * 4 : 
+                                platformY - i * 4;
+                    
+                    ctx.moveTo(platformX, yPos);
+                    for (let x = 0; x <= platformW; x += 5) {
+                        const time = Date.now() / 500;
+                        const waveY = yPos + Math.sin((x / platformW * 2 * Math.PI) + time) * 1.5;
+                        ctx.lineTo(platformX + x, waveY);
+                    }
+                }
                 ctx.stroke();
             }
             
