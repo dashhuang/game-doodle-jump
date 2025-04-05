@@ -10,11 +10,11 @@ const difficultyConfig = {
     movingThreshold: 0.2,             // 移动平台出现的难度阈值
     breakableThreshold: 0.5,          // 易碎平台出现的难度阈值
     movingBreakableThreshold: 0.7,    // 移动易碎平台出现的难度阈值
-    springThreshold: 0.0,             // 弹簧平台出现的难度阈值（从游戏开始就有，但概率会随难度增加）
+    springThreshold: 0.0,             // 弹簧道具出现的难度阈值（从游戏开始就有，但概率会随难度增加）
     
     // 平台出现概率
-    springBaseProbability: 0.08,      // 弹簧平台基础概率
-    springMaxIncrement: 0.16,         // 弹簧平台最大概率增量（难度最高时达到20%概率）
+    springBaseProbability: 0.08,      // 弹簧道具基础概率
+    springMaxIncrement: 0.1,         // 弹簧道具最大概率增量（难度最高时达到24%概率）
     
     // 特殊平台基础概率和最大增量
     movingBaseProbability: 0.1,       // 移动平台基础概率
@@ -29,12 +29,12 @@ const difficultyConfig = {
     // 平台间距
     basePlatformMinYSpacing: 60,      // 初始最小间距
     basePlatformMaxYSpacing: 200,     // 初始最大间距
-    maxPlatformMinYSpacing: 160,       // 最高难度最小间距
+    maxPlatformMinYSpacing: 200,       // 最高难度最小间距
     maxPlatformMaxYSpacing: 240,      // 最高难度最大间距
     
     // 移动平台速度
     movingPlatformBaseSpeed: 1,       // 移动平台基础速度
-    movingPlatformSpeedIncrement: 2 // 移动平台速度难度增量
+    movingPlatformSpeedIncrement: 3 // 移动平台速度难度增量
 };
 
 // 检测设备类型
@@ -57,6 +57,7 @@ let canvasHeight = window.innerHeight;
 // 游戏状态
 let score = 0;
 let gameover = false;
+let gameState = 'menu'; // 新增游戏状态：'menu', 'playing', 'gameover'
 let difficulty = 0; // 难度值，随时间/高度增加
 let previousDifficulty = 0; // 用于跟踪难度变化
 
@@ -140,76 +141,50 @@ const edgeWidth = 60; // 左右两侧各60像素用于点按控制
 let leftEdgeWidth = edgeWidth;
 let rightEdgeWidth = edgeWidth;
 
-// 设置视口实际高度的辅助函数
-function setViewportHeight() {
-    // 设置CSS变量用于真实视口高度
-    const vh = window.innerHeight * 0.01;
-    document.documentElement.style.setProperty('--vh', `${vh}px`);
+// 设置Canvas的DPI以匹配设备像素比
+function setupHiDPICanvas() {
+    // 获取设备像素比
+    const dpr = window.devicePixelRatio || 1;
     
-    // 更新画布尺寸
-    canvasWidth = window.innerWidth;
-    canvasHeight = window.innerHeight;
-    canvas.width = canvasWidth;
-    canvas.height = canvasHeight;
+    // 获取Canvas元素的当前尺寸
+    const rect = canvas.getBoundingClientRect();
     
-    // 重新计算缩放和偏移
-    calculateScalingAndOffset();
-}
-
-// 计算缩放和偏移值（抽取自resizeHandler）
-function calculateScalingAndOffset() {
-    // Calculate scale factor based on width, capped by maxScale
-    scale = Math.min(canvasWidth / logicalWidth, maxScale);
-
-    // Calculate horizontal offset for centering
-    const scaledLogicalWidth = logicalWidth * scale;
-    offsetX = (canvasWidth - scaledLogicalWidth) / 2;
-
-    // Calculate vertical offset to anchor the bottom of the logical view to the canvas bottom
-    const scaledLogicalHeight = logicalHeight * scale;
-    offsetY = canvasHeight - scaledLogicalHeight;
+    // 设置Canvas的实际像素尺寸（内部缓冲区大小）
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
     
-    // 检查并处理安全区域
-    handleSafeAreas();
-}
-
-// 为移动设备进行额外调整
-function adjustForMobile() {
-    if (isMobile) {
-        // 阻止双击缩放
-        let lastTouchEnd = 0;
-        document.addEventListener('touchend', function(e) {
-            const now = Date.now();
-            if (now - lastTouchEnd <= 300) {
-                e.preventDefault();
-            }
-            lastTouchEnd = now;
-        }, false);
-        
-        // 立即更新视口高度
-        setViewportHeight();
-    }
-}
-
-// 处理安全区域
-function handleSafeAreas() {
-    // 获取安全区域大小（通过CSS环境变量）
-    const safeAreaTop = parseInt(getComputedStyle(document.documentElement).getPropertyValue('env(safe-area-inset-top)')) || 0;
-    const safeAreaBottom = parseInt(getComputedStyle(document.documentElement).getPropertyValue('env(safe-area-inset-bottom)')) || 0;
-    const safeAreaLeft = parseInt(getComputedStyle(document.documentElement).getPropertyValue('env(safe-area-inset-left)')) || 0;
-    const safeAreaRight = parseInt(getComputedStyle(document.documentElement).getPropertyValue('env(safe-area-inset-right)')) || 0;
+    // 使用CSS保持Canvas的显示尺寸不变
+    canvas.style.width = `${rect.width}px`;
+    canvas.style.height = `${rect.height}px`;
     
-    // 更新边缘区域大小，考虑安全区域
-    leftEdgeWidth = edgeWidth + safeAreaLeft;
-    rightEdgeWidth = edgeWidth + safeAreaRight;
+    // 缩放上下文以匹配像素比
+    ctx.scale(dpr, dpr);
+    
+    // 应用抗锯齿设置
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    
+    // 设置文本渲染属性
+    ctx.textBaseline = 'middle';
+    
+    return dpr;
 }
 
 // --- Resize Handler ---
 function resizeHandler() {
     canvasWidth = window.innerWidth;
     canvasHeight = window.innerHeight;
-    canvas.width = canvasWidth;
-    canvas.height = canvasHeight;
+    
+    // 更新Canvas样式尺寸
+    canvas.style.width = `${canvasWidth}px`;
+    canvas.style.height = `${canvasHeight}px`;
+    
+    // 设置高DPI Canvas
+    const dpr = setupHiDPICanvas();
+    
+    // 重新设置逻辑尺寸
+    canvasWidth = window.innerWidth;
+    canvasHeight = window.innerHeight;
 
     calculateScalingAndOffset();
 
@@ -224,10 +199,125 @@ function resizeHandler() {
 
 // --- Initialization and Platform Creation (Use Logical Dimensions) ---
 function init() {
+    console.log("初始化游戏...");
+    // 从菜单状态转换到游戏状态
+    gameState = 'playing';
     score = 0;
     gameover = false;
     difficulty = 0;
     previousDifficulty = 0;
+    
+    // 清空弹簧数组
+    springs = [];
+    
+    // 保留现有的玩家位置、颜色和第一个平台
+    // 但需要生成其余初始平台
+    const firstPlatform = platforms.length > 0 ? platforms[0] : null;
+    
+    // 确保玩家位置正确
+    player.x = logicalWidth / 2 - player.baseWidth / 2;
+    player.y = logicalHeight - 100;
+    player.vx = 0;
+    player.vy = 0;
+    player.isJumping = false;
+    player.onGround = false;
+    player.scaleX = 1;
+    player.scaleY = 1;
+    player.squashTimer = 0;
+    player.inputTime = 0;
+    player.movementState = 'idle';
+    
+    // 清除除第一个平台外的所有平台(如果有的话)
+    if (firstPlatform) {
+        platforms = [firstPlatform];
+        
+        // 确保第一个平台在玩家脚下
+        platforms[0].x = player.x + (player.width - platformWidth) / 2;
+        platforms[0].y = player.y + player.height;
+        platforms[0].type = 'normal';
+        platforms[0].isBroken = false;
+    } else {
+        // 如果没有平台，创建一个在玩家脚下
+        platforms = [];
+        const platformY = player.y + player.height;
+        const platformX = player.x + (player.width - platformWidth) / 2;
+        
+        const newPlatform = {
+            x: platformX,
+            y: platformY,
+            width: platformWidth,
+            height: platformHeight,
+            type: 'normal',
+            isBroken: false,
+            vx: 0,
+            direction: 1,
+            breakTimer: 0
+        };
+        platforms.push(newPlatform);
+    }
+    
+    // 创建其余初始平台
+    for (let i = 1; i < initialPlatforms; i++) {
+        let yPos = logicalHeight - 50 - i * ((difficultyConfig.basePlatformMinYSpacing + difficultyConfig.basePlatformMaxYSpacing) / 2);
+        createPlatform(Math.random() * (logicalWidth - platformWidth), yPos, 'normal');
+    }
+    
+    // 重置控制状态
+    keys = {};
+    touchStartX = null;
+    isTouching = false;
+    joystickActive = false;
+    
+    // 确保调整大小正确
+    resizeHandler();
+    
+    // 为移动设备进行额外调整
+    adjustForMobile();
+    
+    // 确保游戏循环正在运行
+    if (!gameLoopRunning) {
+        console.log("启动游戏循环");
+        gameLoopRunning = true;
+        requestAnimationFrame(gameLoop);
+    } else {
+        console.log("游戏循环已经在运行中");
+    }
+}
+
+// 初始化菜单场景（只创建玩家脚下的第一个平台，其他平台在游戏开始后生成）
+function initMenu() {
+    console.log("初始化菜单...");
+    // 重置游戏状态
+    score = 0;
+    gameover = false;
+    gameState = 'menu';
+    difficulty = 0;
+    previousDifficulty = 0;
+    clouds = [];
+    platforms = [];
+    springs = []; // 清空弹簧数组
+    
+    // 添加角色动画相关状态
+    playerMenuAnimation = {
+        active: false,
+        type: 'none',
+        timer: 0,
+        jumpHeight: 0,
+        rotation: 0,
+        scale: 1,
+        colorChange: false
+    };
+    
+    // 确保画布尺寸和缩放正确设置
+    resizeHandler();
+    
+    // 设置高DPI Canvas
+    setupHiDPICanvas();
+    
+    // 随机选择一个玩家颜色
+    currentPlayerColor = playerColors[Math.floor(Math.random() * playerColors.length)];
+    
+    // 放置玩家角色（与游戏开始时相同位置）
     player.x = logicalWidth / 2 - player.baseWidth / 2; // Center based on base width
     player.y = logicalHeight - 100; 
     player.vx = 0;
@@ -237,42 +327,44 @@ function init() {
     player.scaleX = 1;
     player.scaleY = 1;
     player.squashTimer = 0;
-    player.inputTime = 0; // 重置按键时间计数器
-    platforms = [];
-    clouds = [];
-
-    // 随机选择一个玩家颜色
-    currentPlayerColor = playerColors[Math.floor(Math.random() * playerColors.length)];
-
-    // Create initial platforms within logical coordinate space
-    for (let i = 0; i < initialPlatforms; i++) {
-        let yPos = logicalHeight - 50 - i * ((difficultyConfig.basePlatformMinYSpacing + difficultyConfig.basePlatformMaxYSpacing) / 2);
-        createPlatform(Math.random() * (logicalWidth - platformWidth), yPos, 'normal');
-    }
-    platforms[0].x = player.x + (player.width - platformWidth) / 2;
-    platforms[0].y = player.y + player.height;
-    platforms[0].type = 'normal';
-
-    // 创建初始云朵 (分布在初始可见区域)
+    player.inputTime = 0;
+    player.movementState = 'idle';
+    
+    // 只创建玩家脚下的第一个平台
+    const platformY = player.y + player.height;
+    const platformX = player.x + (player.width - platformWidth) / 2;
+    
+    // 创建单个平台并设置在玩家脚下
+    const firstPlatform = {
+        x: platformX,
+        y: platformY,
+        width: platformWidth,
+        height: platformHeight,
+        type: 'normal',
+        isBroken: false,
+        vx: 0,
+        direction: 1,
+        breakTimer: 0
+    };
+    platforms.push(firstPlatform);
+    
+    // 创建初始云朵 (与游戏开始时相同)
     for (let i = 0; i < initialClouds; i++) {
         let yPos = logicalHeight - (Math.random() * logicalHeight * 1.5); // Spread initial clouds higher
         createCloud(Math.random() * logicalWidth, yPos);
     }
-
-    keys = {};
-    touchStartX = null;
-    isTouching = false;
-
-    // Ensure resize handler runs at least once initially
-    resizeHandler();
-
-    // 为移动设备进行额外调整
-    adjustForMobile();
-
+    
+    // 开始游戏循环
     if (!gameLoopRunning) {
-        requestAnimationFrame(gameLoop);
+        console.log("启动游戏循环（菜单）");
         gameLoopRunning = true;
+        requestAnimationFrame(gameLoop);
+    } else {
+        console.log("游戏循环已经在运行中（菜单）");
     }
+    
+    // 立即绘制一次菜单，确保按钮可见
+    drawMenu();
 }
 
 // createPlatform remains the same, works in logical coordinates
@@ -282,18 +374,9 @@ function createPlatform(x, y, forcedType = null) {
         const rand = Math.random();
         
         // 计算各类平台的当前概率
-        let springProb = 0;
         let movingProb = 0;
         let breakableProb = 0;
         let movingBreakableProb = 0;
-        
-        // 弹簧平台概率计算（随难度增加）
-        if (difficulty >= difficultyConfig.springThreshold) {
-            springProb = difficultyConfig.springBaseProbability + 
-                difficultyConfig.springMaxIncrement * 
-                ((difficulty - difficultyConfig.springThreshold) / 
-                (1 - difficultyConfig.springThreshold));
-        }
         
         // 移动平台概率计算
         if (difficulty >= difficultyConfig.movingThreshold) {
@@ -322,12 +405,8 @@ function createPlatform(x, y, forcedType = null) {
         // 根据随机值和计算出的概率确定平台类型（按优先级顺序判断）
         let probSum = 0;
         
-        // 弹簧平台判断（最高优先级）
-        if (rand < springProb) {
-            type = 'spring';
-        }
         // 移动易碎平台判断
-        else if (rand < (probSum += springProb) + movingBreakableProb && difficulty >= difficultyConfig.movingBreakableThreshold) {
+        if (rand < movingBreakableProb && difficulty >= difficultyConfig.movingBreakableThreshold) {
             type = 'movingBreakable';
         }
         // 易碎平台判断
@@ -352,15 +431,60 @@ function createPlatform(x, y, forcedType = null) {
         isBroken: false,
         vx: 0,
         direction: 1,
-        breakTimer: 0, // 添加：破碎后的消失计时器
-        springActive: false, // 弹簧是否激活
-        springTimer: 0 // 弹簧动画计时器
+        breakTimer: 0 // 添加：破碎后的消失计时器
     };
     if (platform.type === 'moving' || platform.type === 'movingBreakable') {
         platform.vx = difficultyConfig.movingPlatformBaseSpeed + difficulty * difficultyConfig.movingPlatformSpeedIncrement;
         platform.direction = Math.random() < 0.5 ? 1 : -1;
     }
     platforms.push(platform);
+    
+    // 随机决定是否在平台上添加弹簧
+    // 基于难度增加弹簧出现概率
+    const springProb = difficultyConfig.springBaseProbability + 
+        difficultyConfig.springMaxIncrement * difficulty;
+        
+    if (Math.random() < springProb) {
+        // 创建弹簧并添加到数组中
+        const spring = createSpring(x, y, platformWidth);
+        if (spring) {
+            springs.push(spring);
+        }
+    }
+}
+
+// 添加弹簧道具数组
+let springs = [];
+const springWidth = 20; // 弹簧宽度
+const springHeight = 10; // 弹簧高度（静止状态）
+const springActiveHeight = 20; // 弹簧激活时的高度
+// 移除单独的springProbability变量，使用difficultyConfig中的值
+
+// 创建一个新的弹簧道具
+function createSpring(platformX, platformY, platformWidth) {
+    // 在平台宽度范围内随机选择位置，留出边缘空间
+    const margin = Math.min(10, platformWidth / 6); // 最小边缘空间为10像素或平台宽度的1/6
+    const minX = platformX + margin;
+    const maxX = platformX + platformWidth - margin - springWidth;
+    
+    // 确保弹簧有足够空间放置
+    if (maxX <= minX) {
+        return null; // 平台太小，无法放置弹簧
+    }
+    
+    // 随机选择弹簧在平台上的位置
+    const springX = minX + Math.random() * (maxX - minX);
+    
+    // 创建并返回弹簧对象
+    return {
+        x: springX,
+        y: platformY - springHeight, // 放在平台上方
+        width: springWidth,
+        height: springHeight,
+        active: false,
+        timer: 0,
+        platformIndex: platforms.length - 1 // 记录弹簧所在的平台索引
+    };
 }
 
 // --- Create Cloud ---
@@ -416,11 +540,23 @@ function drawCloudShape(ctx, x, y, size, cloudType) {
 
 // --- Input Handling (Convert screen coords to logical coords) ---
 document.addEventListener('keydown', (e) => {
-    // 如果游戏已结束，任意键重新开始
-    if (gameover) {
+    // 在菜单状态下按Enter或空格开始游戏
+    if (gameState === 'menu' && (e.code === 'Enter' || e.code === 'Space')) {
         init();
         return;
     }
+    
+    // 在游戏结束状态下只有按左右方向键或空格键才重新开始
+    if (gameState === 'gameover') {
+        // 判断是否按下了指定的按键
+        if (e.code === 'ArrowLeft' || e.code === 'ArrowRight' || 
+            e.code === 'KeyA' || e.code === 'KeyD' || e.code === 'Space') {
+            init();
+        }
+        return;
+    }
+    
+    // 游戏中的键盘控制
     keys[e.code] = true;
 });
 
@@ -476,21 +612,36 @@ canvas.addEventListener('touchmove', (e) => {
 
 canvas.addEventListener('touchend', (e) => {
     e.preventDefault();
-    if (gameover) {
-         // Simple restart on tap anywhere when game over
-         init();
-         // Prevent isTouching state bleeding into new game
-         isTouching = false;
-         touchStartX = null;
-         joystickActive = false;
-         return; // Don't process touch for movement if restarting
-     }
+    if (gameState === 'menu') {
+        const touch = e.changedTouches[0];
+        const rect = canvas.getBoundingClientRect();
+        const touchX = touch.clientX - rect.left;
+        const touchY = touch.clientY - rect.top;
+        
+        if (menuButton && isInsideButton(touchX, touchY, menuButton)) {
+            // 点击了开始按钮
+            init();
+        } else if (menuPlayerHitbox && isInsideButton(touchX, touchY, menuPlayerHitbox)) {
+            // 点击了玩家角色
+            triggerPlayerAnimation();
+        }
+        return;
+    }
     
-    // 检查哪种控制方式处于激活状态
+    if (gameState === 'gameover') {
+        // 游戏结束状态，点击任意位置重新开始
+        init();
+        // 重置触摸状态
+        isTouching = false;
+        touchStartX = null;
+        joystickActive = false;
+        return;
+    }
+    
+    // 游戏中的触摸控制
     if (joystickActive) {
         joystickActive = false;
     } else {
-        // 常规点按控制处理
         isTouching = false;
         touchStartX = null;
     }
@@ -595,12 +746,30 @@ function update(dt) {
     player.y += player.vy;
 
     // Platform Updates (Use Logical Dimensions)
-    platforms.forEach(platform => {
+    platforms.forEach((platform, index) => {
         if (platform.type === 'moving' || platform.type === 'movingBreakable') {
+            const prevX = platform.x;
             platform.x += platform.vx * platform.direction;
             // Bounce using logical width
             if (platform.x <= 0 || platform.x + platform.width >= logicalWidth) {
                 platform.direction *= -1;
+            }
+            
+            // 更新该平台上的弹簧位置
+            springs.forEach(spring => {
+                if (spring.platformIndex === index) {
+                    spring.x += platform.x - prevX;
+                }
+            });
+        }
+    });
+
+    // 更新弹簧状态
+    springs.forEach(spring => {
+        if (spring.active) {
+            spring.timer--;
+            if (spring.timer <= 0) {
+                spring.active = false;
             }
         }
     });
@@ -608,44 +777,83 @@ function update(dt) {
     // Collision Detection (Use Logical Dimensions)
     player.onGround = false;
     if (player.vy > 0) { // Only check when falling
-        platforms.forEach(platform => {
-            // Adjust player dimensions for collision check based on BASE size
-            const checkWidth = player.baseWidth;
-            const checkHeight = player.baseHeight;
-            const checkX = player.x;
-            const checkY = player.y;
-
-            if (!platform.isBroken &&
-                checkX < platform.x + platform.width &&
-                checkX + checkWidth > platform.x &&
-                checkY + checkHeight >= platform.y &&
-                checkY + checkHeight <= platform.y + platform.height + 10) 
+        // 首先检测与弹簧的碰撞
+        let springCollision = false;
+        springs.forEach(spring => {
+            // 调整玩家碰撞箱，使其更窄以便精确检测弹簧碰撞
+            const playerFeetWidth = player.baseWidth * 0.7; // 使用70%的宽度作为"脚"的碰撞区域
+            const playerFeetX = player.x + (player.baseWidth - playerFeetWidth) / 2;
+            
+            if (!springCollision && 
+                playerFeetX < spring.x + spring.width &&
+                playerFeetX + playerFeetWidth > spring.x &&
+                player.y + player.baseHeight >= spring.y &&
+                player.y + player.baseHeight <= spring.y + spring.height + 10) 
             {
-                // Landed on platform
-                if (!player.isJumping) { // Trigger squash only on initial landing, not while jumping up
-                     player.squashTimer = player.squashDuration; // Start squash timer
-                }
-                player.y = platform.y - player.baseHeight; // Position based on base height
-                
-                // 根据平台类型确定跳跃力度
-                if (platform.type === 'spring') {
-                    platform.springActive = true;
-                    platform.springTimer = 10; // 10帧的弹簧动画
-                    player.vy = player.jumpPower * 1.5; // 弹簧砖块提供1.5倍跳跃力
-                } else {
-                    player.vy = player.jumpPower; // 普通跳跃力
-                }
-                
-                player.isJumping = true; 
-                player.onGround = true; 
-                if (platform.type === 'breakable' || platform.type === 'movingBreakable') {
-                    platform.isBroken = true;
-                    platform.breakTimer = 30; // 设置为30帧(约0.5秒，假设60fps)
+                // 检查弹簧对应的平台是否有效（未破碎）
+                const platform = platforms[spring.platformIndex];
+                if (platform && !platform.isBroken) {
+                    // 碰到了弹簧
+                    if (!player.isJumping) {
+                        player.squashTimer = player.squashDuration; // 启动挤压计时器
+                    }
+                    player.y = spring.y - player.baseHeight; // 基于弹簧高度定位
+                    
+                    // 激活弹簧
+                    spring.active = true;
+                    spring.timer = 10; // 10帧的弹簧动画
+                    
+                    // 提供额外的弹跳力
+                    player.vy = player.jumpPower * 1.5; // 弹簧提供1.5倍跳跃力
+                    
+                    player.isJumping = true; 
+                    player.onGround = true;
+                    springCollision = true; // 标记为已与弹簧碰撞
+                    
+                    // 如果平台是易碎的，触发破碎
+                    if (platform.type === 'breakable' || platform.type === 'movingBreakable') {
+                        platform.isBroken = true;
+                        platform.breakTimer = 30; // 30帧后消失
+                    }
                 }
             }
         });
+        
+        // 如果没有与弹簧碰撞，则检测与平台的碰撞
+        if (!springCollision) {
+            platforms.forEach(platform => {
+                // 调整玩家尺寸用于碰撞检测，基于BASE尺寸
+                const checkWidth = player.baseWidth;
+                const checkHeight = player.baseHeight;
+                const checkX = player.x;
+                const checkY = player.y;
+
+                if (!platform.isBroken &&
+                    checkX < platform.x + platform.width &&
+                    checkX + checkWidth > platform.x &&
+                    checkY + checkHeight >= platform.y &&
+                    checkY + checkHeight <= platform.y + platform.height + 10) 
+                {
+                    // 落在平台上
+                    if (!player.isJumping) { // 仅在初次着陆时触发挤压，不是上跳时
+                        player.squashTimer = player.squashDuration; // 启动挤压计时器
+                    }
+                    player.y = platform.y - player.baseHeight; // 基于基础高度定位
+                    
+                    // 普通跳跃力度
+                    player.vy = player.jumpPower;
+                    
+                    player.isJumping = true; 
+                    player.onGround = true; 
+                    if (platform.type === 'breakable' || platform.type === 'movingBreakable') {
+                        platform.isBroken = true;
+                        platform.breakTimer = 30; // 30帧后消失
+                    }
+                }
+            });
+        }
     } else {
-         // Reset jumping flag if moving upwards and no longer on ground
+         // 如果向上移动且不在地面，重置跳跃标志
          if (player.vy < 0) {
             player.isJumping = false; 
          }
@@ -662,6 +870,7 @@ function update(dt) {
         cameraOffset = logicalHeight / 2 - player.y;
         player.y = logicalHeight / 2;
         platforms.forEach(p => p.y += cameraOffset);
+        springs.forEach(s => s.y += cameraOffset); // 更新弹簧位置
         clouds.forEach(c => c.y += cameraOffset * 0.5); // Clouds scroll slower for parallax effect
         score += Math.round(cameraOffset);
     }
@@ -691,21 +900,36 @@ function update(dt) {
         }
     });
     
-    // 移除屏幕下方的平台和破碎计时结束的平台
-    platforms = platforms.filter(p => 
-        p.y < logicalHeight && // 保留屏幕内的平台
-        !(p.type === 'breakable' && p.isBroken && p.breakTimer <= 0) // 移除计时结束的破碎平台
-    );
-
-    // --- 弹簧特效动画 ---
-    platforms.forEach(platform => {
-        if (platform.type === 'spring' && platform.springActive) {
-            platform.springTimer--;
-            if (platform.springTimer <= 0) {
-                platform.springActive = false;
-            }
+    // 找出需要移除的平台索引
+    const platformsToRemove = [];
+    platforms.forEach((p, index) => {
+        if (p.y >= logicalHeight || // 平台低于屏幕底部
+           ((p.type === 'breakable' || p.type === 'movingBreakable') && p.isBroken && p.breakTimer <= 0)) // 破碎平台计时结束
+        {
+            platformsToRemove.push(index);
         }
     });
+    
+    // 从后向前移除平台，并更新弹簧的platformIndex
+    if (platformsToRemove.length > 0) {
+        // 从大到小排序索引，以便从后向前删除
+        platformsToRemove.sort((a, b) => b - a);
+        
+        // 移除平台
+        platformsToRemove.forEach(index => {
+            platforms.splice(index, 1);
+            
+            // 移除该平台上的弹簧
+            springs = springs.filter(s => s.platformIndex !== index);
+            
+            // 更新后续平台上的弹簧的platformIndex
+            springs.forEach(s => {
+                if (s.platformIndex > index) {
+                    s.platformIndex--;
+                }
+            });
+        });
+    }
 
     // Generate New Platforms (Based on Logical Coordinates)
     let highestPlatformY = platforms.length > 0 ? Math.min(...platforms.map(p => p.y)) : logicalHeight;
@@ -724,14 +948,21 @@ function update(dt) {
     // Game Over Condition (Based on Logical Height)
     if (player.y > logicalHeight) { // Game over as soon as player's top edge is below bottom
         gameover = true;
-        console.log("Game Over! Score:", score);
-        gameLoopRunning = false;
-        // drawGameOver will handle scaling
+        gameState = 'gameover';
+        console.log("Game Over! Score:", Math.floor(score / 100));
+        // 不再设置 gameLoopRunning = false
+        // gameLoopRunning = false; // 这一行导致了游戏重启的问题
     }
 
-    // Difficulty Update
-    difficulty = Math.min(1, score / difficultyConfig.maxScore);
-    if (difficulty !== previousDifficulty) {
+    // Difficulty Update - 修改难度计算和输出逻辑
+    const rawDifficulty = Math.min(1, score / difficultyConfig.maxScore);
+    
+    // 按0.05步长取整难度值
+    const roundedDifficulty = Math.floor(rawDifficulty * 20) / 20;
+    
+    // 只有当取整后的难度值发生变化时才更新和输出
+    if (roundedDifficulty !== difficulty) {
+        difficulty = roundedDifficulty;
         console.log(`Difficulty changed to: ${difficulty.toFixed(3)} (Score: ${score})`);
         previousDifficulty = difficulty;
     }
@@ -794,60 +1025,6 @@ function draw() {
     });
     // --- End Background Clouds ---
 
-    // --- Draw Player --- 
-    ctx.fillStyle = currentPlayerColor; // 使用随机选择的玩家颜色
-
-    // Calculate scaled dimensions and position offset for drawing
-    const drawWidth = player.baseWidth * player.scaleX;
-    const drawHeight = player.baseHeight * player.scaleY;
-    const drawX = player.x - (drawWidth - player.baseWidth) / 2; // Adjust x to keep center
-    const drawY = player.y - (drawHeight - player.baseHeight) / 2; // Adjust y to keep center
-    const cornerRadius = 10; // Adjust for desired roundness
-
-    // Draw rounded rectangle body
-    ctx.beginPath();
-    ctx.roundRect(drawX, drawY, drawWidth, drawHeight, cornerRadius);
-    ctx.fill();
-
-    // Draw Eyes (relative to the scaled body)
-    const eyeRadius = 3;
-    const baseEyeOffsetX = drawWidth * 0.25; // Base horizontal offset from center
-    const eyeOffsetY = drawHeight * 0.3;
-    let eyeShiftX = 0; // <-- ADDED: Horizontal shift based on movement
-
-    // --- 基于移动状态的眼睛表情 ---
-    const eyeMoveAmount = drawWidth * 0.08; // How much the eyes move horizontally
-
-    // 根据移动状态改变眼睛位置
-    if (player.movementState === 'right') {
-        eyeShiftX = eyeMoveAmount;
-    } else if (player.movementState === 'left') {
-        eyeShiftX = -eyeMoveAmount;
-    }
-
-    // 根据速度显示特殊效果
-    let speedRatio = Math.abs(player.vx) / player.maxSpeed;
-    let eyeSize = eyeRadius;
-    if (speedRatio > 0.7) {
-        // 高速时眼睛变小，显示聚焦效果
-        eyeSize = eyeRadius * 0.8;
-    }
-    // --- 眼睛表情逻辑结束 ---
-
-    const centerX = drawX + drawWidth / 2;
-    ctx.fillStyle = 'black'; 
-    // Left eye
-    ctx.beginPath();
-    // Calculate position relative to center, then apply shift
-    ctx.arc(centerX - baseEyeOffsetX + eyeShiftX, drawY + eyeOffsetY, eyeSize, 0, Math.PI * 2);
-    ctx.fill();
-    // Right eye
-    ctx.beginPath();
-    // Calculate position relative to center, then apply shift
-    ctx.arc(centerX + baseEyeOffsetX + eyeShiftX, drawY + eyeOffsetY, eyeSize, 0, Math.PI * 2);
-    ctx.fill();
-    // --- End Player --- 
-
     // --- Draw Platforms --- 
     platforms.forEach(platform => {
         if (platform.y + platform.height > visibleLogicalTopY && platform.y < logicalHeight) {
@@ -871,10 +1048,6 @@ function draw() {
                 // 冰块风格 - 淡蓝色+白色
                 grassColor = '#A5F2F3'; // 浅蓝色(冰块顶部)
                 soilColor = '#77C5D5'; // 稍深蓝色(冰块底部)
-            } else if (platform.type === 'spring') {
-                // 弹簧砖块风格 - 橙黄色
-                grassColor = '#FFD700'; // 金色(弹簧顶部)
-                soilColor = '#FFA500'; // 橙色(弹簧底部)
             } else if (platform.type === 'movingBreakable') {
                 // 移动+易碎平台 - 紫色
                 grassColor = '#E6A8D7'; // 淡紫色(顶部)
@@ -967,40 +1140,6 @@ function draw() {
                 ctx.fill();
             }
             
-            // 弹簧砖块的特殊效果
-            if (platform.type === 'spring') {
-                // 绘制弹簧图案
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-                ctx.lineWidth = 2;
-                
-                // 弹簧图案 - 在平台上方绘制弹簧
-                const springBaseX = platformX + platformW/2;
-                const springBaseY = platformY;
-                const springWidth = platformW * 0.3;
-                const springHeight = platform.springActive ? platformH * 0.5 : platformH * 0.3; // 激活时拉长
-                
-                // 绘制弹簧线圈
-                ctx.beginPath();
-                ctx.moveTo(springBaseX - springWidth/2, springBaseY);
-                
-                // 弹簧线圈数
-                const coils = 3;
-                const coilHeight = springHeight / (coils * 2);
-                
-                for (let i = 0; i < coils; i++) {
-                    // 一个完整的波浪
-                    ctx.lineTo(springBaseX + springWidth/2, springBaseY - (i*2+1)*coilHeight);
-                    ctx.lineTo(springBaseX - springWidth/2, springBaseY - (i*2+2)*coilHeight);
-                }
-                
-                ctx.stroke();
-                
-                // 绘制弹簧顶部小板
-                ctx.fillStyle = 'rgba(255, 215, 0, 0.8)'; // 金色半透明
-                const topY = springBaseY - springHeight;
-                ctx.fillRect(springBaseX - springWidth*0.6, topY - platformH*0.15, springWidth*1.2, platformH*0.15);
-            }
-            
             // 已破碎平台的裂缝
             if ((platform.type === 'breakable' || platform.type === 'movingBreakable') && platform.isBroken) {
                 // 冰块破碎效果
@@ -1030,6 +1169,100 @@ function draw() {
         }
     });
     // --- End Platforms --- 
+    
+    // --- Draw Springs ---
+    springs.forEach(spring => {
+        if (spring.y + spring.height > visibleLogicalTopY && spring.y < logicalHeight) {
+            const springX = spring.x;
+            const springY = spring.y;
+            const springW = spring.width;
+            // 根据弹簧是否激活决定高度
+            const springH = spring.active ? springActiveHeight : spring.height;
+            
+            // 绘制弹簧图案
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx.lineWidth = 2;
+            
+            // 弹簧图案
+            const springBaseY = springY + springH; // 弹簧底部
+            const springTopY = springY;
+            
+            // 绘制弹簧线圈
+            ctx.beginPath();
+            ctx.moveTo(springX, springBaseY);
+            
+            // 弹簧线圈数
+            const coils = 3;
+            const coilHeight = springH / (coils * 2);
+            
+            for (let i = 0; i < coils; i++) {
+                // 一个完整的波浪
+                ctx.lineTo(springX + springW, springBaseY - (i*2+1)*coilHeight);
+                ctx.lineTo(springX, springBaseY - (i*2+2)*coilHeight);
+            }
+            
+            ctx.stroke();
+            
+            // 绘制弹簧顶部小板
+            ctx.fillStyle = 'rgba(255, 215, 0, 0.8)'; // 金色半透明
+            ctx.fillRect(springX - springW*0.3, springTopY - platformHeight*0.15, springW*1.6, platformHeight*0.15);
+        }
+    });
+    // --- End Springs ---
+
+    // --- Draw Player --- 
+    ctx.fillStyle = currentPlayerColor; // 使用随机选择的玩家颜色
+
+    // Calculate scaled dimensions and position offset for drawing
+    const drawWidth = player.baseWidth * player.scaleX;
+    const drawHeight = player.baseHeight * player.scaleY;
+    const drawX = player.x - (drawWidth - player.baseWidth) / 2; // Adjust x to keep center
+    const drawY = player.y - (drawHeight - player.baseHeight) / 2; // Adjust y to keep center
+    const cornerRadius = 10; // Adjust for desired roundness
+
+    // Draw rounded rectangle body
+    ctx.beginPath();
+    ctx.roundRect(drawX, drawY, drawWidth, drawHeight, cornerRadius);
+    ctx.fill();
+
+    // Draw Eyes (relative to the scaled body)
+    const eyeRadius = 3;
+    const baseEyeOffsetX = drawWidth * 0.25; // Base horizontal offset from center
+    const eyeOffsetY = drawHeight * 0.3;
+    let eyeShiftX = 0; // <-- ADDED: Horizontal shift based on movement
+
+    // --- 基于移动状态的眼睛表情 ---
+    const eyeMoveAmount = drawWidth * 0.08; // How much the eyes move horizontally
+
+    // 根据移动状态改变眼睛位置
+    if (player.movementState === 'right') {
+        eyeShiftX = eyeMoveAmount;
+    } else if (player.movementState === 'left') {
+        eyeShiftX = -eyeMoveAmount;
+    }
+
+    // 根据速度显示特殊效果
+    let speedRatio = Math.abs(player.vx) / player.maxSpeed;
+    let eyeSize = eyeRadius;
+    if (speedRatio > 0.7) {
+        // 高速时眼睛变小，显示聚焦效果
+        eyeSize = eyeRadius * 0.8;
+    }
+    // --- 眼睛表情逻辑结束 ---
+
+    const centerX = drawX + drawWidth / 2;
+    ctx.fillStyle = 'black'; 
+    // Left eye
+    ctx.beginPath();
+    // Calculate position relative to center, then apply shift
+    ctx.arc(centerX - baseEyeOffsetX + eyeShiftX, drawY + eyeOffsetY, eyeSize, 0, Math.PI * 2);
+    ctx.fill();
+    // Right eye
+    ctx.beginPath();
+    // Calculate position relative to center, then apply shift
+    ctx.arc(centerX + baseEyeOffsetX + eyeShiftX, drawY + eyeOffsetY, eyeSize, 0, Math.PI * 2);
+    ctx.fill();
+    // --- End Player --- 
 
     // --- Draw Foreground Clouds --- > ADDED LAYER LOGIC
     ctx.fillStyle = 'rgba(255, 255, 255, 0.9)'; // Set fill style for clouds
@@ -1043,25 +1276,11 @@ function draw() {
     });
     // --- End Foreground Clouds ---
 
-    // Score Display (Use logical coordinates, but anchor to top, account for offset)
-    ctx.restore(); // Restore the context state before drawing Score
+    // Restore context state (removes translation, scaling, and clipping)
+    ctx.restore();
     
-    // Apply scaling for UI
-    ctx.save();
-    // Score is displayed in physical coordinates at the top of the screen
-    ctx.font = '48px Arial';
-    ctx.fillStyle = 'white';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-
-    // 获取安全区域顶部尺寸
-    const safeAreaTop = parseInt(getComputedStyle(document.documentElement).getPropertyValue('env(safe-area-inset-top)')) || 0;
-    // 使用分数显示位置，考虑安全区域
-    const scoreY = Math.max(20, safeAreaTop + 10);
-
-    // Use displayScore for readability
-    const displayScore = Math.floor(score / 100);
-    ctx.fillText(`${displayScore}`, canvasWidth / 2, scoreY);
+    // 绘制得分显示
+    drawScore();
 
     // Draw virtual joystick if active
     if (joystickActive) {
@@ -1098,78 +1317,615 @@ function draw() {
         ctx.globalAlpha = 1.0;
     }
 
-    // Restore context state (removes translation, scaling, and clipping)
-    ctx.restore();
-
     // Game Over screen is handled separately to overlay on top
     if (gameover) {
        drawGameOver();
     }
 }
 
-function drawGameOver() {
-    // Draw Game Over text centered on the physical canvas, potentially over the scaled game area
-     ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-     ctx.fillRect(0, 0, canvasWidth, canvasHeight); // Cover full screen
-     ctx.fillStyle = 'white';
-     ctx.font = '40px Arial';
-     ctx.textAlign = 'center';
-     // Center text on the physical canvas width/height
-     ctx.fillText('Game Over!', canvasWidth / 2, canvasHeight / 2 - 40);
-     ctx.font = '24px Arial';
-     const displayScore = Math.floor(score / 100);
-     ctx.fillText('得分: ' + displayScore, canvasWidth / 2, canvasHeight / 2);
-     ctx.fillText('点击或触摸屏幕重新开始', canvasWidth / 2, canvasHeight / 2 + 40); // Updated text
+// 绘制得分
+function drawScore() {
+    // 保存当前上下文状态
+    ctx.save();
+    
+    // 应用抗锯齿设置
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    
+    // 设置字体和渲染样式
+    ctx.font = '48px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = 'white';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+
+    // 获取安全区域顶部尺寸
+    const safeAreaTop = parseInt(getComputedStyle(document.documentElement).getPropertyValue('env(safe-area-inset-top)')) || 0;
+    // 使用分数显示位置，考虑安全区域
+    const scoreY = Math.max(20, safeAreaTop + 10);
+
+    // 使用整数坐标以避免模糊
+    const scoreX = Math.round(canvasWidth / 2);
+    // Use displayScore for readability
+    const displayScore = Math.floor(score / 100);
+    
+    // 添加轻微阴影提高可读性
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+    ctx.shadowBlur = 4;
+    ctx.shadowOffsetX = 1;
+    ctx.shadowOffsetY = 1;
+    
+    ctx.fillText(`${displayScore}`, scoreX, scoreY);
+    
+    // 恢复上下文状态
+    ctx.restore();
 }
 
-// --- Game Loop (remains mostly the same) ---
+// --- 绘制菜单界面 ---
+function drawMenu() {
+    // 清空画布
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+    
+    // 绘制背景
+    ctx.fillStyle = '#87CEEB';
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    
+    // 绘制游戏场景（与游戏内相同的渲染方式）
+    // 保存上下文
+    ctx.save();
+    
+    // 应用缩放和平移
+    ctx.translate(offsetX, offsetY);
+    ctx.scale(scale, scale);
+    
+    // --- Define and Apply Clipping Region based on visible logical area ---
+    const visibleLogicalTopY = logicalHeight - (canvasHeight / scale);
+    const visibleLogicalHeight = canvasHeight / scale;
+    const visibleLogicalLeftX = (0 - offsetX) / scale;
+    const visibleLogicalWidth = canvasWidth / scale;
+    
+    ctx.beginPath();
+    ctx.rect(visibleLogicalLeftX, visibleLogicalTopY, visibleLogicalWidth, visibleLogicalHeight);
+    ctx.clip();
+    
+    // --- 绘制背景云 ---
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+    clouds.forEach(cloud => {
+        if (cloud.layer === 'back') {
+            if (cloud.y + cloud.size > visibleLogicalTopY && cloud.y - cloud.size < logicalHeight) {
+                drawCloudShape(ctx, cloud.x, cloud.y, cloud.size, cloud.type);
+            }
+        }
+    });
+    
+    // --- 绘制平台 ---
+    platforms.forEach(platform => {
+        if (platform.y + platform.height > visibleLogicalTopY && platform.y < logicalHeight) {
+            const platformX = platform.x;
+            const platformY = platform.y;
+            const platformW = platform.width;
+            const platformH = platform.height;
+            const grassHeight = platformH * 0.4;
+            const platformCornerRadius = 5;
+            
+            // 确定基础颜色
+            let grassColor = '#90EE90'; // 淡绿色草地
+            let soilColor = '#CD853F'; // 秘鲁色土壤
+            
+            // 绘制土壤(下部分)
+            ctx.fillStyle = soilColor;
+            ctx.beginPath();
+            ctx.roundRect(platformX, platformY, platformW, platformH, platformCornerRadius);
+            ctx.fill();
+            
+            // 绘制草地(上部分)
+            ctx.fillStyle = grassColor;
+            ctx.beginPath();
+            ctx.roundRect(platformX, platformY, platformW, grassHeight, 
+                [platformCornerRadius, platformCornerRadius, 0, 0]);
+            ctx.fill();
+            
+            // 绘制低多边形效果(简化版)
+            // 草地阴影三角形
+            ctx.fillStyle = 'rgba(0,0,0,0.1)';
+            ctx.beginPath();
+            ctx.moveTo(platformX + platformW * 0.2, platformY);
+            ctx.lineTo(platformX + platformW * 0.5, platformY + grassHeight);
+            ctx.lineTo(platformX, platformY + grassHeight);
+            ctx.closePath();
+            ctx.fill();
+            
+            // 草地高光三角形
+            ctx.fillStyle = 'rgba(255,255,255,0.15)';
+            ctx.beginPath();
+            ctx.moveTo(platformX + platformW * 0.6, platformY);
+            ctx.lineTo(platformX + platformW, platformY);
+            ctx.lineTo(platformX + platformW, platformY + grassHeight * 0.7);
+            ctx.closePath();
+            ctx.fill();
+            
+            // 土壤部分阴影
+            ctx.fillStyle = 'rgba(0,0,0,0.15)';
+            ctx.beginPath();
+            ctx.moveTo(platformX, platformY + grassHeight);
+            ctx.lineTo(platformX + platformW * 0.4, platformY + grassHeight);
+            ctx.lineTo(platformX + platformW * 0.2, platformY + platformH);
+            ctx.lineTo(platformX, platformY + platformH);
+            ctx.closePath();
+            ctx.fill();
+        }
+    });
+    
+    // --- 绘制玩家（添加动画效果） ---
+    // 保存上下文用于角色动画
+    ctx.save();
+    
+    // 添加角色动画效果
+    let drawY = player.y;
+    let drawX = player.x;
+    
+    // 创建角色动画效果
+    if (playerMenuAnimation.active) {
+        // 更新动画计时器
+        playerMenuAnimation.timer++;
+        
+        // 根据动画类型应用不同效果
+        if (playerMenuAnimation.type === 'jump') {
+            // 简单的跳跃动画 - 正弦曲线
+            const jumpProgress = playerMenuAnimation.timer / 30; // 30帧完成一次跳跃
+            playerMenuAnimation.jumpHeight = Math.sin(jumpProgress * Math.PI) * 30;
+            drawY = player.y - playerMenuAnimation.jumpHeight;
+            
+            // 跳跃动画结束
+            if (playerMenuAnimation.timer >= 30) {
+                playerMenuAnimation.active = false;
+                playerMenuAnimation.timer = 0;
+                playerMenuAnimation.jumpHeight = 0;
+            }
+        } else if (playerMenuAnimation.type === 'spin') {
+            // 旋转动画
+            playerMenuAnimation.rotation = playerMenuAnimation.timer * 12; // 每帧12度
+            
+            // 设置旋转中心
+            ctx.translate(drawX + player.baseWidth/2, drawY + player.baseHeight/2);
+            ctx.rotate(playerMenuAnimation.rotation * Math.PI / 180);
+            ctx.translate(-(drawX + player.baseWidth/2), -(drawY + player.baseHeight/2));
+            
+            // 旋转动画结束
+            if (playerMenuAnimation.timer >= 30) {
+                playerMenuAnimation.active = false;
+                playerMenuAnimation.timer = 0;
+                playerMenuAnimation.rotation = 0;
+            }
+        } else if (playerMenuAnimation.type === 'bounce') {
+            // 弹跳缩放动画
+            const bounceProgress = playerMenuAnimation.timer / 20; // 20帧完成一次弹跳
+            const scaleFactor = 1 + 0.3 * Math.sin(bounceProgress * Math.PI);
+            player.scaleX = scaleFactor;
+            player.scaleY = 2 - scaleFactor; // 反向缩放Y轴，扁平效果
+            
+            // 弹跳动画结束
+            if (playerMenuAnimation.timer >= 20) {
+                playerMenuAnimation.active = false;
+                playerMenuAnimation.timer = 0;
+                player.scaleX = 1;
+                player.scaleY = 1;
+            }
+        } else if (playerMenuAnimation.type === 'color') {
+            // 颜色变换动画
+            if (playerMenuAnimation.timer === 1) {
+                // 随机选择一个新颜色（确保与当前颜色不同）
+                let newColorIndex;
+                do {
+                    newColorIndex = Math.floor(Math.random() * playerColors.length);
+                } while (playerColors[newColorIndex] === currentPlayerColor);
+                
+                currentPlayerColor = playerColors[newColorIndex];
+            }
+            
+            // 简单的弹跳效果配合颜色变化
+            const bounceProgress = playerMenuAnimation.timer / 15;
+            player.scaleY = 1 + 0.2 * Math.sin(bounceProgress * Math.PI);
+            
+            // 颜色动画结束
+            if (playerMenuAnimation.timer >= 15) {
+                playerMenuAnimation.active = false;
+                playerMenuAnimation.timer = 0;
+                player.scaleY = 1;
+            }
+        }
+    }
+    
+    // 计算尺寸和位置（考虑动画影响）
+    const drawWidth = player.baseWidth * player.scaleX;
+    const drawHeight = player.baseHeight * player.scaleY;
+    
+    // 调整绘制位置以保持图形中心不变
+    const adjustedX = drawX - (drawWidth - player.baseWidth) / 2;
+    const adjustedY = drawY - (drawHeight - player.baseHeight) / 2;
+    const cornerRadius = 10;
+    
+    // 设置玩家颜色
+    ctx.fillStyle = currentPlayerColor;
+    
+    // 绘制圆角矩形身体
+    ctx.beginPath();
+    ctx.roundRect(adjustedX, adjustedY, drawWidth, drawHeight, cornerRadius);
+    ctx.fill();
+    
+    // 绘制眼睛
+    const eyeRadius = 3;
+    const baseEyeOffsetX = drawWidth * 0.25;
+    const eyeOffsetY = drawHeight * 0.3;
+    
+    const centerX = adjustedX + drawWidth / 2;
+    ctx.fillStyle = 'black';
+    
+    // 菜单中的眨眼动画
+    const blinkFrequency = 120; // 每120帧眨一次眼
+    const blinkDuration = 10; // 眨眼持续10帧
+    
+    if (Math.floor(Date.now() / 1000 * 60) % blinkFrequency < blinkDuration) {
+        // 眨眼状态 - 绘制线条而不是圆形
+        ctx.lineWidth = 2;
+        // 左眼
+        ctx.beginPath();
+        ctx.moveTo(centerX - baseEyeOffsetX - eyeRadius, adjustedY + eyeOffsetY);
+        ctx.lineTo(centerX - baseEyeOffsetX + eyeRadius, adjustedY + eyeOffsetY);
+        ctx.stroke();
+        // 右眼
+        ctx.beginPath();
+        ctx.moveTo(centerX + baseEyeOffsetX - eyeRadius, adjustedY + eyeOffsetY);
+        ctx.lineTo(centerX + baseEyeOffsetX + eyeRadius, adjustedY + eyeOffsetY);
+        ctx.stroke();
+    } else {
+        // 正常状态 - 绘制圆形眼睛
+        // 左眼
+        ctx.beginPath();
+        ctx.arc(centerX - baseEyeOffsetX, adjustedY + eyeOffsetY, eyeRadius, 0, Math.PI * 2);
+        ctx.fill();
+        // 右眼
+        ctx.beginPath();
+        ctx.arc(centerX + baseEyeOffsetX, adjustedY + eyeOffsetY, eyeRadius, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    
+    // 存储角色位置信息（用于点击检测）
+    menuPlayerHitbox = {
+        x: drawX * scale + offsetX,
+        y: drawY * scale + offsetY,
+        width: player.baseWidth * scale,
+        height: player.baseHeight * scale
+    };
+    
+    // 恢复绘图上下文
+    ctx.restore();
+    
+    // --- 绘制前景云 ---
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+    clouds.forEach(cloud => {
+        if (cloud.layer === 'front') {
+            if (cloud.y + cloud.size > visibleLogicalTopY && cloud.y - cloud.size < logicalHeight) {
+                drawCloudShape(ctx, cloud.x, cloud.y, cloud.size, cloud.type);
+            }
+        }
+    });
+    
+    // 恢复上下文
+    ctx.restore();
+    
+    // 绘制半透明覆盖层
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    
+    // 绘制游戏标题
+    ctx.save();
+    
+    // 应用抗锯齿设置和更好的字体渲染
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    
+    ctx.font = 'bold 48px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = 'white';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle'; // 改进垂直对齐
+    
+    // 使用更轻微的阴影效果
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+    ctx.shadowBlur = 4;
+    ctx.shadowOffsetX = 1;
+    ctx.shadowOffsetY = 1;
+    
+    // 使用整数坐标位置以避免模糊
+    const titleX = Math.round(canvasWidth / 2);
+    const titleY = Math.round(canvasHeight / 3);
+    ctx.fillText('无尽跳跃', titleX, titleY);
+    
+    // 绘制开始按钮
+    const buttonWidth = 200;
+    const buttonHeight = 60;
+    const buttonX = Math.round(canvasWidth / 2 - buttonWidth / 2);
+    const buttonY = Math.round(canvasHeight / 2);
+    
+    // 按钮背景
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    ctx.beginPath();
+    ctx.roundRect(buttonX, buttonY, buttonWidth, buttonHeight, 10);
+    ctx.fill();
+    
+    // 按钮文字
+    ctx.fillStyle = '#4CAF50';
+    ctx.font = '24px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
+    const buttonTextX = Math.round(canvasWidth / 2);
+    const buttonTextY = Math.round(buttonY + buttonHeight / 2);
+    ctx.fillText('开始游戏', buttonTextX, buttonTextY);
+    
+    // 存储按钮位置信息（用于点击检测）
+    menuButton = {
+        x: buttonX,
+        y: buttonY,
+        width: buttonWidth,
+        height: buttonHeight
+    };
+    
+    // 恢复上下文
+    ctx.restore();
+    
+    // 更新云朵位置（缓慢移动）
+    clouds.forEach(cloud => {
+        cloud.x += cloud.speed * cloud.direction;
+        // 如果云朵移出屏幕，从另一侧重新进入
+        if (cloud.x > logicalWidth + cloud.size) {
+            cloud.x = -cloud.size;
+        } else if (cloud.x < -cloud.size) {
+            cloud.x = logicalWidth + cloud.size;
+        }
+    });
+}
+
+function drawGameOver() {
+    // 绘制半透明覆盖层，与开始界面保持一致
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)'; // 改为与菜单界面相同的透明度
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    
+    // 游戏结束文字
+    ctx.save();
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 48px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    
+    // 减少模糊度并使用更轻微的阴影效果
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+    ctx.shadowBlur = 4;
+    ctx.shadowOffsetX = 1;
+    ctx.shadowOffsetY = 1;
+    
+    // 应用抗锯齿
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    
+    // 使用整数坐标位置以避免模糊
+    const textX = Math.round(canvasWidth / 2);
+    const textY = Math.round(canvasHeight / 2 - 80); // 向上移动一些以腾出空间
+    ctx.fillText('游戏结束!', textX, textY);
+    
+    // 显示得分
+    ctx.font = 'bold 36px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
+    const displayScore = Math.floor(score / 100);
+    ctx.fillText(`得分: ${displayScore}`, Math.round(canvasWidth / 2), Math.round(canvasHeight / 2 - 20));
+    
+    // 重新开始按钮
+    const buttonWidth = 200;
+    const buttonHeight = 50;
+    const buttonX = Math.round(canvasWidth / 2 - buttonWidth / 2);
+    const buttonY = Math.round(canvasHeight / 2 + 30);
+    
+    // 按钮背景 - 使用稍微带透明的柔和颜色
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    ctx.beginPath();
+    ctx.roundRect(buttonX, buttonY, buttonWidth, buttonHeight, 10);
+    ctx.fill();
+    
+    // 为按钮添加轻微的边框，增加立体感
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    
+    // 设置文本基线为居中
+    ctx.textBaseline = 'middle';
+    
+    // 按钮文字 - 使用更柔和的颜色
+    ctx.fillStyle = '#3498db'; // 使用柔和的蓝色
+    ctx.font = '24px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
+    // 移除额外的偏移，使文字垂直居中
+    ctx.fillText('重新开始', Math.round(canvasWidth / 2), Math.round(buttonY + buttonHeight / 2));
+    
+    // 存储按钮位置信息（用于点击检测）
+    gameOverRestartButton = {
+        x: buttonX,
+        y: buttonY,
+        width: buttonWidth,
+        height: buttonHeight
+    };
+    
+    // 回到主界面按钮
+    const menuButtonY = buttonY + buttonHeight + 20; // 在第一个按钮下方
+    
+    // 按钮背景
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+    ctx.beginPath();
+    ctx.roundRect(buttonX, menuButtonY, buttonWidth, buttonHeight, 10);
+    ctx.fill();
+    
+    // 边框
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+    ctx.stroke();
+    
+    // 按钮文字
+    ctx.fillStyle = '#27ae60'; // 使用柔和的绿色
+    // 移除额外的偏移，使文字垂直居中
+    ctx.fillText('回到主界面', Math.round(canvasWidth / 2), Math.round(menuButtonY + buttonHeight / 2));
+    
+    // 存储回到主界面按钮位置
+    gameOverMenuButton = {
+        x: buttonX,
+        y: menuButtonY,
+        width: buttonWidth,
+        height: buttonHeight
+    };
+    
+    ctx.restore();
+}
+
+// --- Game Loop ---
 let lastTime = 0;
 let gameLoopRunning = false;
+let menuButton = null; // 存储菜单按钮位置信息
+let menuPlayerHitbox = null; // 存储菜单中玩家角色的位置信息
+let gameOverRestartButton = null; // 存储游戏结束界面重新开始按钮位置
+let gameOverMenuButton = null; // 存储游戏结束界面回到主界面按钮位置
+let playerMenuAnimation = {
+    active: false, 
+    type: 'none',
+    timer: 0,
+    jumpHeight: 0,
+    rotation: 0,
+    scale: 1,
+    colorChange: false
+};
+
+// 添加玩家角色点击动画
+function triggerPlayerAnimation() {
+    if (!playerMenuAnimation.active) {
+        // 随机选择一种动画类型
+        const animations = ['jump', 'spin', 'bounce', 'color'];
+        const randomAnimation = animations[Math.floor(Math.random() * animations.length)];
+        
+        playerMenuAnimation.active = true;
+        playerMenuAnimation.type = randomAnimation;
+        playerMenuAnimation.timer = 0;
+        
+        console.log("触发角色动画:", randomAnimation);
+    }
+}
+
 function gameLoop(timestamp) {
-    if (!gameLoopRunning && !gameover) return;
-    if (gameover && !gameLoopRunning) return; // 确保结束后不再循环
+    if (!gameLoopRunning) return;
 
     const deltaTime = timestamp - lastTime;
     lastTime = timestamp;
 
-    if (!gameover) {
+    // 根据游戏状态执行不同的更新和绘制逻辑
+    if (gameState === 'menu') {
+        drawMenu();
+    } else if (gameState === 'playing') {
         update(deltaTime / 1000);
-        draw(); // Call the updated draw function
+        draw();
+        if (gameover) {
+            gameState = 'gameover';
+            console.log("游戏结束，状态切换到gameover");
+        }
+    } else if (gameState === 'gameover') {
+        draw();
+        drawGameOver();
     }
 
     requestAnimationFrame(gameLoop);
+}
+
+// 检查点击是否在按钮内
+function isInsideButton(x, y, button) {
+    return x >= button.x && x <= button.x + button.width &&
+           y >= button.y && y <= button.y + button.height;
 }
 
 // --- Event Listeners ---
 // Add resize listener
 window.addEventListener('resize', resizeHandler);
 
-// Add click listener for restart (especially for desktop)
+// Add click listener for restart and menu interaction
 canvas.addEventListener('click', (e) => {
-    if (gameover) {
-        init();
+    const rect = canvas.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+    
+    if (gameState === 'menu') {
+        if (menuButton && isInsideButton(clickX, clickY, menuButton)) {
+            // 点击了开始按钮
+            init();
+        } else if (menuPlayerHitbox && isInsideButton(clickX, clickY, menuPlayerHitbox)) {
+            // 点击了玩家角色
+            triggerPlayerAnimation();
+        }
+    } else if (gameState === 'gameover') {
+        // 检查点击的是哪个按钮
+        if (gameOverRestartButton && isInsideButton(clickX, clickY, gameOverRestartButton)) {
+            // 点击了重新开始按钮
+            init();
+        } else if (gameOverMenuButton && isInsideButton(clickX, clickY, gameOverMenuButton)) {
+            // 点击了回到主界面按钮
+            initMenu();
+        }
     }
 });
 
-// Touchend listener needs similar simplified restart logic
+// Touchend listener for mobile
 canvas.addEventListener('touchend', (e) => {
     e.preventDefault();
-    if (gameover) {
-         // Simple restart on tap anywhere when game over
-         init();
-         // Prevent isTouching state bleeding into new game
-         isTouching = false;
-         touchStartX = null;
-         joystickActive = false;
-         return; // Don't process touch for movement if restarting
-     }
-    // Handle regular touchend logic only if not game over
-    isTouching = false;
-    touchStartX = null;
-});
+    
+    if (gameState === 'menu') {
+        const touch = e.changedTouches[0];
+        const rect = canvas.getBoundingClientRect();
+        const touchX = touch.clientX - rect.left;
+        const touchY = touch.clientY - rect.top;
+        
+        if (menuButton && isInsideButton(touchX, touchY, menuButton)) {
+            // 点击了开始按钮
+            init();
+        } else if (menuPlayerHitbox && isInsideButton(touchX, touchY, menuPlayerHitbox)) {
+            // 触摸了玩家角色
+            triggerPlayerAnimation();
+        }
+        return;
+    }
+    
+    if (gameState === 'gameover') {
+        const touch = e.changedTouches[0];
+        const rect = canvas.getBoundingClientRect();
+        const touchX = touch.clientX - rect.left;
+        const touchY = touch.clientY - rect.top;
+        
+        // 检查触摸的是哪个按钮
+        if (gameOverRestartButton && isInsideButton(touchX, touchY, gameOverRestartButton)) {
+            // 触摸了重新开始按钮
+            init();
+        } else if (gameOverMenuButton && isInsideButton(touchX, touchY, gameOverMenuButton)) {
+            // 触摸了回到主界面按钮
+            initMenu();
+        }
+        
+        // 重置触摸状态
+        isTouching = false;
+        touchStartX = null;
+        joystickActive = false;
+        return;
+    }
+    
+    // 游戏中的触摸控制
+    if (joystickActive) {
+        joystickActive = false;
+    } else {
+        isTouching = false;
+        touchStartX = null;
+    }
+}, { passive: false });
 
 // 设置事件监听
-window.addEventListener('resize', resizeHandler);
 window.addEventListener('orientationchange', () => {
     setTimeout(setViewportHeight, 100);
 });
@@ -1177,6 +1933,73 @@ window.addEventListener('orientationchange', () => {
 // 初始化时检测移动设备并进行相应调整
 adjustForMobile();
 
-// --- Start Game ---
-init(); // Calls resizeHandler inside
-console.log("Game initialized. Starting loop..."); 
+// --- Start with Menu ---
+// 替换原来的init()调用，改为initMenu()
+initMenu();
+console.log("Menu initialized. Waiting for player to start game..."); 
+
+// 设置视口实际高度的辅助函数
+function setViewportHeight() {
+    // 设置CSS变量用于真实视口高度
+    const vh = window.innerHeight * 0.01;
+    document.documentElement.style.setProperty('--vh', `${vh}px`);
+    
+    // 更新画布尺寸
+    canvasWidth = window.innerWidth;
+    canvasHeight = window.innerHeight;
+    
+    // 更新Canvas样式尺寸
+    canvas.style.width = `${canvasWidth}px`;
+    canvas.style.height = `${canvasHeight}px`;
+    
+    // 重新计算缩放和偏移
+    calculateScalingAndOffset();
+}
+
+// 计算缩放和偏移值（抽取自resizeHandler）
+function calculateScalingAndOffset() {
+    // Calculate scale factor based on width, capped by maxScale
+    scale = Math.min(canvasWidth / logicalWidth, maxScale);
+
+    // Calculate horizontal offset for centering
+    const scaledLogicalWidth = logicalWidth * scale;
+    offsetX = (canvasWidth - scaledLogicalWidth) / 2;
+
+    // Calculate vertical offset to anchor the bottom of the logical view to the canvas bottom
+    const scaledLogicalHeight = logicalHeight * scale;
+    offsetY = canvasHeight - scaledLogicalHeight;
+    
+    // 检查并处理安全区域
+    handleSafeAreas();
+}
+
+// 为移动设备进行额外调整
+function adjustForMobile() {
+    if (isMobile) {
+        // 阻止双击缩放
+        let lastTouchEnd = 0;
+        document.addEventListener('touchend', function(e) {
+            const now = Date.now();
+            if (now - lastTouchEnd <= 300) {
+                e.preventDefault();
+            }
+            lastTouchEnd = now;
+        }, false);
+        
+        // 立即更新视口高度
+        setViewportHeight();
+    }
+}
+
+// 处理安全区域
+function handleSafeAreas() {
+    // 获取安全区域大小（通过CSS环境变量）
+    const safeAreaTop = parseInt(getComputedStyle(document.documentElement).getPropertyValue('env(safe-area-inset-top)')) || 0;
+    const safeAreaBottom = parseInt(getComputedStyle(document.documentElement).getPropertyValue('env(safe-area-inset-bottom)')) || 0;
+    const safeAreaLeft = parseInt(getComputedStyle(document.documentElement).getPropertyValue('env(safe-area-inset-left)')) || 0;
+    const safeAreaRight = parseInt(getComputedStyle(document.documentElement).getPropertyValue('env(safe-area-inset-right)')) || 0;
+    
+    // 更新边缘区域大小，考虑安全区域
+    leftEdgeWidth = edgeWidth + safeAreaLeft;
+    rightEdgeWidth = edgeWidth + safeAreaRight;
+}
