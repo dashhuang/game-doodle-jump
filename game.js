@@ -1,6 +1,63 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
+// ===== 游戏模式 =====
+const GAME_MODE = {
+    ENDLESS: 'ENDLESS',
+    DAILY_CHALLENGE: 'DAILY_CHALLENGE'
+};
+let currentGameMode = GAME_MODE.ENDLESS; // 默认是无尽模式
+
+// ===== PRNG (Pseudo-Random Number Generator) for Daily Challenge =====
+let prngSeed = 0;
+const prng_a = 1664525;
+const prng_c = 1013904223;
+const prng_m = Math.pow(2, 32);
+
+// LCG PRNG function
+function lcg() {
+    // const seedBefore = prngSeed; // Log removed
+    prngSeed = (prng_a * prngSeed + prng_c) % prng_m;
+    const result = prngSeed / prng_m; // 返回 0 到 1 之间的数
+    // console.log(`[LCG] Seed: ${seedBefore} -> ${prngSeed}, Result: ${result.toFixed(8)}`); // Log removed
+    return result;
+}
+
+// Function to get current date string (YYYY-MM-DD)
+function getCurrentDateString() {
+    const date = new Date();
+    const year = date.getFullYear();
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const day = date.getDate().toString().padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+// Function to generate a seed from a string (simple hash)
+function stringToSeed(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+        const char = str.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash |= 0; // Convert to 32bit integer
+    }
+    // Make sure seed is non-negative for LCG
+    return Math.abs(hash); 
+}
+
+// Select the random function based on game mode
+let randomFunc = Math.random;
+
+function initializePrng(seed) {
+    // console.log("Initializing PRNG with seed:", seed); // 移除
+    prngSeed = seed;
+    randomFunc = lcg;
+}
+
+function useDefaultRandom() {
+    // console.log("Using default Math.random()"); // 移除
+    randomFunc = Math.random;
+}
+
 // ===== 难度配置（统一管理所有难度相关参数） =====
 const difficultyConfig = {
     // 基础难度计算
@@ -74,9 +131,13 @@ let canvasHeight = window.innerHeight;
 // 游戏状态
 let score = 0;
 let gameover = false;
-let gameState = 'menu'; // 新增游戏状态：'menu', 'playing', 'gameover'
+let gameState = 'menu'; // 新增游戏状态：'menu', 'playing', 'gameover', 'challengeComplete'
 let difficulty = 0; // 难度值，随时间/高度增加
 let previousDifficulty = 0; // 用于跟踪难度变化
+
+// --- 每日挑战终点平台相关 ---
+let isFinishPlatformGenerated = false;
+let finishPlatform = null;
 
 // 云朵数组和参数
 let clouds = [];
@@ -92,41 +153,42 @@ const cloudMaxSpeed = 0.5;
 
 // 添加玩家随机颜色数组
 const playerColors = [
-    '#32CD32', // 亮绿色 (Lime Green)
-    '#FF4500', // 橙红色 (Orange Red)
-    '#9370DB', // 中紫色 (Medium Purple)
-    '#FFD700', // 金色 (Gold)
-    '#00CED1'  // 青色 (Dark Turquoise)
+    '#FF6347', // 番茄红
+    '#4682B4', // 钢蓝色
+    '#32CD32', // 酸橙绿
+    '#FFD700', // 金色
+    '#BA55D3', // 中兰花紫
+    '#FFA07A'  // 亮鲑鱼色
 ];
 // 当前选择的玩家颜色
 let currentPlayerColor = playerColors[0]; // 默认为第一个颜色，将在init中随机选择
 
 // 玩家对象 (Use logical dimensions)
 const player = {
-    x: logicalWidth / 2 - 25,
-    y: logicalHeight - 100, // Position relative to logical height
-    width: 40, // Slightly narrower base width
-    height: 40, // Slightly shorter base height
-    baseWidth: 40,
-    baseHeight: 40,
-    vx: 0, // 水平速度
-    vy: 0, // 垂直速度
-    gravity: 0.55,
-    jumpPower: -16, // 起跳力度（负数表示向上）
+    baseWidth: 40,      // 恢复基础宽度
+    baseHeight: 40,     // 恢复基础高度
+    width: 40,          // 恢复宽度
+    height: 40,         // 恢复高度
+    x: logicalWidth / 2 - 20, // 根据 baseWidth 居中
+    y: logicalHeight - 100,  // 恢复 Y 坐标
+    vx: 0,
+    vy: 0,
+    jumpPower: -16,      // 恢复跳跃力
+    gravity: 0.55,       // 恢复重力
+    moveSpeed: 3,        // 基础移动速度 (这个值看起来是后来加的，先保留)
+    acceleration: 0.3,   // 恢复加速度
+    maxSpeed: 7,         // 恢复最大速度
+    friction: 0.9,       // 恢复摩擦力 (这个值好像也被改过，先用0.9)
     isJumping: false,
     onGround: false,
-    // Squash and Stretch properties
-    scaleX: 1, 
-    scaleY: 1,
-    squashAmount: 0.2, // How much to squash/stretch (20%)
-    squashDuration: 20, // How many frames the effect lasts
-    squashTimer: 0,
-    // 加速度相关属性
-    acceleration: 0.3, // 每帧加速度
-    maxSpeed: 7, // 最大速度
-    inputTime: 0, // 按键持续时间计数器
-    // 移动方向状态（新增）
-    movementState: 'idle' // 'left', 'right', 或 'idle'
+    scaleX: 1,           // 水平缩放（用于动画）
+    scaleY: 1,           // 垂直缩放（用于动画）
+    squashTimer: 0,      // 挤压动画计时器
+    squashDuration: 20,  // 恢复挤压动画持续时间
+    squashAmount: 0.2,   // 恢复挤压量
+    inputTime: 0,        // 按键/触摸持续时间
+    movementState: 'idle' // 'idle', 'left', 'right'
+    // 移除 color 属性，依赖 currentPlayerColor
 };
 
 // 平台数组 (Use logical dimensions)
@@ -222,15 +284,31 @@ function resizeHandler() {
 // --- Initialization and Platform Creation (Use Logical Dimensions) ---
 function init() {
     console.log("初始化游戏...");
-    // 从菜单状态转换到游戏状态
-    gameState = 'playing';
+
+    // ===== Game Mode Specific Setup =====
+    if (currentGameMode === GAME_MODE.DAILY_CHALLENGE) {
+        const dateString = getCurrentDateString();
+        const seed = stringToSeed(dateString);
+        initializePrng(seed);
+        // console.log(`Daily Challenge Mode - Seed for ${dateString}: ${seed}`); // 保留这个关键日志?
+    } else {
+        useDefaultRandom();
+        // console.log("Endless Mode - Using Math.random()"); // 移除
+    }
+
+    // 重置游戏状态
     score = 0;
     gameover = false;
-    difficulty = 0;
+    gameState = 'playing';
+    difficulty = 0; // Reset difficulty for new game
     previousDifficulty = 0;
-    
-    // 清空弹簧数组
-    springs = [];
+    platforms = [];
+    clouds = [];
+    springs = []; // 清空弹簧
+    phantomPlatforms = []; // 清空假砖块
+    isFinishPlatformGenerated = false; // <<< 重置终点平台状态
+    finishPlatform = null;             // <<< 重置终点平台对象
+    // 移除phantomGenerationTimer的重置
     
     // 保留现有的玩家位置、颜色和第一个平台
     // 但需要生成其余初始平台
@@ -281,7 +359,7 @@ function init() {
     // 创建其余初始平台
     for (let i = 1; i < initialPlatforms; i++) {
         let yPos = logicalHeight - 50 - i * ((difficultyConfig.basePlatformMinYSpacing + difficultyConfig.basePlatformMaxYSpacing) / 2);
-        createPlatform(Math.random() * (logicalWidth - platformWidth), yPos, 'normal');
+        createPlatform(randomFunc() * (logicalWidth - platformWidth), yPos, 'normal');
     }
     
     // 重置控制状态
@@ -319,7 +397,10 @@ function initMenu() {
     platforms = [];
     springs = []; // 清空弹簧数组
     phantomPlatforms = []; // 清空假砖块数组
+    isFinishPlatformGenerated = false; // <<< 重置终点平台状态
+    finishPlatform = null;             // <<< 重置终点平台对象
     // 移除phantomGenerationTimer的重置
+    useDefaultRandom(); // Menu always uses default random
     
     // 添加角色动画相关状态
     playerMenuAnimation = {
@@ -339,7 +420,7 @@ function initMenu() {
     setupHiDPICanvas();
     
     // 随机选择一个玩家颜色
-    currentPlayerColor = playerColors[Math.floor(Math.random() * playerColors.length)];
+    currentPlayerColor = playerColors[Math.floor(randomFunc() * playerColors.length)];
     
     // 放置玩家角色（与游戏开始时相同位置）
     player.x = logicalWidth / 2 - player.baseWidth / 2; // Center based on base width
@@ -374,8 +455,8 @@ function initMenu() {
     
     // 创建初始云朵 (与游戏开始时相同)
     for (let i = 0; i < initialClouds; i++) {
-        let yPos = logicalHeight - (Math.random() * logicalHeight * 1.5); // Spread initial clouds higher
-        createCloud(Math.random() * logicalWidth, yPos);
+        let yPos = logicalHeight - (randomFunc() * logicalHeight * 1.5); // Spread initial clouds higher
+        createCloud(randomFunc() * logicalWidth, yPos);
     }
     
     // 开始游戏循环
@@ -392,11 +473,20 @@ function initMenu() {
 }
 
 // createPlatform remains the same, works in logical coordinates
-function createPlatform(x, y, forcedType = null) {
+function createPlatform(x, y, forcedType = null, isFinish = false) {
     let type = 'normal';
-    if (!forcedType) { // Only determine type randomly if not forced
-        const rand = Math.random();
-        
+    // let typeRand = -1; // Log removed
+    // let directionRand = -1; // Log removed
+    // let springRand = -1; // Log removed
+
+    // 如果是终点平台，类型固定
+    if (isFinish) {
+        type = 'finish';
+    } else if (!forcedType) { // Only determine type randomly if not forced
+        // typeRand = randomFunc(); // Log removed
+        // console.log(`[createPlatform@Y=${y.toFixed(1)}] Type Rand: ${typeRand.toFixed(8)}`); // Log removed
+        const rand = randomFunc(); // 使用获取到的随机数 (恢复直接调用)
+
         // 计算各类平台的当前概率
         let movingProb = 0;
         let breakableProb = 0;
@@ -458,13 +548,14 @@ function createPlatform(x, y, forcedType = null) {
         else {
             type = 'normal';
         }
+        // console.log(`[createPlatform@Y=${y.toFixed(1)}] Determined Type: ${type}`); // Log removed
     }
     const platform = {
         x: x, // Already using logical X from argument
         y: y,
         width: platformWidth,
-        height: platformHeight,
-        type: forcedType || type,
+        height: platformHeight * (isFinish ? 1.5 : 1), // 终点平台可以稍厚一点
+        type: isFinish ? 'finish' : (forcedType || type),
         isBroken: false,
         vx: 0,
         vy: 0,
@@ -473,11 +564,14 @@ function createPlatform(x, y, forcedType = null) {
         breakTimer: 0, // 添加：破碎后的消失计时器
         // 上下移动平台额外属性
         initialY: y,
-        verticalRange: difficultyConfig.verticalMovingRange
+        verticalRange: difficultyConfig.verticalMovingRange,
+        isFinish: isFinish // 添加标志
     };
     if (platform.type === 'moving' || platform.type === 'movingBreakable') {
         platform.vx = difficultyConfig.movingPlatformBaseSpeed + difficulty * difficultyConfig.movingPlatformSpeedIncrement;
-        platform.direction = Math.random() < 0.5 ? 1 : -1;
+        // directionRand = randomFunc(); // Log removed
+        platform.direction = randomFunc() < 0.5 ? 1 : -1; // 恢复直接调用
+        // console.log(`[createPlatform@Y=${y.toFixed(1)}] Moving Direction Rand: ${directionRand.toFixed(8)}, Direction: ${platform.direction}`); // Log removed
     }
     else if (platform.type === 'verticalMoving') {
         platform.vy = difficultyConfig.verticalMovingBaseSpeed + difficulty * difficultyConfig.verticalMovingSpeedIncrement;
@@ -487,20 +581,32 @@ function createPlatform(x, y, forcedType = null) {
         platform.verticalRange = difficultyConfig.verticalMovingRange;
         
         // 随机初始方向
-        platform.verticalDirection = Math.random() < 0.5 ? -1 : 1;
+        // directionRand = randomFunc(); // Log removed
+        platform.verticalDirection = randomFunc() < 0.5 ? -1 : 1; // 恢复直接调用
+        // console.log(`[createPlatform@Y=${y.toFixed(1)}] Vertical Direction Rand: ${directionRand.toFixed(8)}, Direction: ${platform.verticalDirection}`); // Log removed
     }
     platforms.push(platform);
     
-    // 随机决定是否在平台上添加弹簧
-    // 基于难度增加弹簧出现概率
-    const springProb = difficultyConfig.springBaseProbability + 
-        difficultyConfig.springMaxIncrement * difficulty;
-        
-    if (Math.random() < springProb) {
-        // 创建弹簧并添加到数组中
-        const spring = createSpring(x, y, platformWidth);
-        if (spring) {
-            springs.push(spring);
+    // 如果是终点平台，保存引用
+    if (isFinish) {
+        finishPlatform = platform;
+        // console.log(`[createPlatform] Finish platform created at Y: ${y.toFixed(1)}`); // 移除
+    }
+
+    // 不在终点平台上生成弹簧
+    if (!isFinish) {
+        // 随机决定是否在平台上添加弹簧
+        const springProb = difficultyConfig.springBaseProbability + 
+            difficultyConfig.springMaxIncrement * difficulty;
+        // springRand = randomFunc(); // Log removed
+        // console.log(`[createPlatform@Y=${y.toFixed(1)}] Spring Rand: ${springRand.toFixed(8)}, Threshold: ${springProb.toFixed(3)}`); // Log removed
+        if (randomFunc() < springProb) { // 恢复直接调用
+            // 创建弹簧并添加到数组中
+            const spring = createSpring(x, y, platformWidth);
+            if (spring) {
+                // console.log(`[createPlatform@Y=${y.toFixed(1)}] Spring generated.`); // Log removed
+                springs.push(spring);
+            }
         }
     }
 }
@@ -525,7 +631,7 @@ function createSpring(platformX, platformY, platformWidth) {
     }
     
     // 随机选择弹簧在平台上的位置
-    const springX = minX + Math.random() * (maxX - minX);
+    const springX = minX + randomFunc() * (maxX - minX);
     
     // 创建并返回弹簧对象
     return {
@@ -541,17 +647,17 @@ function createSpring(platformX, platformY, platformWidth) {
 
 // --- Create Cloud ---
 function createCloud(x, y) {
-    const height = cloudMinHeight + Math.random() * (cloudMaxHeight - cloudMinHeight);
+    const height = cloudMinHeight + randomFunc() * (cloudMaxHeight - cloudMinHeight);
     const size = height * 0.8; // Base size on height for the drawing function
-    const speed = cloudMinSpeed + Math.random() * (cloudMaxSpeed - cloudMinSpeed);
-    const direction = Math.random() < 0.5 ? 1 : -1;
-    const type = Math.floor(Math.random() * 3); // Randomly choose cloud type (0, 1, or 2)
-    const layer = Math.random() < 0.7 ? 'back' : 'front'; // 70% chance to be in the back
+    const speed = cloudMinSpeed + randomFunc() * (cloudMaxSpeed - cloudMinSpeed);
+    const direction = randomFunc() < 0.5 ? 1 : -1;
+    const type = Math.floor(randomFunc() * 3); // Randomly choose cloud type (0, 1, or 2)
+    const layer = randomFunc() < 0.7 ? 'back' : 'front'; // 70% chance to be in the back
 
     clouds.push({
         x: x,
         y: y,
-        width: cloudMinWidth + Math.random() * (cloudMaxWidth - cloudMinWidth),
+        width: cloudMinWidth + randomFunc() * (cloudMaxWidth - cloudMinWidth),
         height: height,
         size: size,
         type: type,
@@ -594,20 +700,23 @@ function drawCloudShape(ctx, x, y, size, cloudType) {
 document.addEventListener('keydown', (e) => {
     // 在菜单状态下按Enter或空格开始游戏
     if (gameState === 'menu' && (e.code === 'Enter' || e.code === 'Space')) {
+        // 默认启动无尽模式
+        console.log("Keydown: Starting Endless Mode");
+        currentGameMode = GAME_MODE.ENDLESS;
         init();
         return;
     }
-    
+
     // 在游戏结束状态下只有按左右方向键或空格键才重新开始
     if (gameState === 'gameover') {
         // 判断是否按下了指定的按键
-        if (e.code === 'ArrowLeft' || e.code === 'ArrowRight' || 
+        if (e.code === 'ArrowLeft' || e.code === 'ArrowRight' ||
             e.code === 'KeyA' || e.code === 'KeyD' || e.code === 'Space') {
-            init();
+            init(); // 默认重新开始当前模式
         }
         return;
     }
-    
+
     // 游戏中的键盘控制
     keys[e.code] = true;
 });
@@ -669,9 +778,17 @@ canvas.addEventListener('touchend', (e) => {
         const rect = canvas.getBoundingClientRect();
         const touchX = touch.clientX - rect.left;
         const touchY = touch.clientY - rect.top;
-        
+
+        // 检查点击的是哪个按钮
         if (menuButton && isInsideButton(touchX, touchY, menuButton)) {
-            // 点击了开始按钮
+            // 点击了 无尽模式 按钮
+            console.log("Touched Endless Mode Button");
+            currentGameMode = GAME_MODE.ENDLESS;
+            init();
+        } else if (dailyChallengeButton && isInsideButton(touchX, touchY, dailyChallengeButton)) {
+            // 点击了 每日挑战 按钮
+            console.log("Touched Daily Challenge Button");
+            currentGameMode = GAME_MODE.DAILY_CHALLENGE;
             init();
         } else if (menuPlayerHitbox && isInsideButton(touchX, touchY, menuPlayerHitbox)) {
             // 点击了玩家角色
@@ -679,10 +796,23 @@ canvas.addEventListener('touchend', (e) => {
         }
         return;
     }
-    
+
     if (gameState === 'gameover') {
         // 游戏结束状态，点击任意位置重新开始
-        init();
+        // 修改为点击按钮才响应
+        const touch = e.changedTouches[0];
+        const rect = canvas.getBoundingClientRect();
+        const touchX = touch.clientX - rect.left;
+        const touchY = touch.clientY - rect.top;
+        
+        if (gameOverRestartButton && isInsideButton(touchX, touchY, gameOverRestartButton)) {
+            // 点击了重新开始按钮，重新开始当前模式
+            init();
+        } else if (gameOverMenuButton && isInsideButton(touchX, touchY, gameOverMenuButton)) {
+             // 点击了回到主界面按钮
+             initMenu();
+        }
+
         // 重置触摸状态
         isTouching = false;
         touchStartX = null;
@@ -780,7 +910,8 @@ function handleInput() {
 
 // --- Game Logic Update (Use Logical Dimensions) ---
 function update(dt) {
-    if (gameover) return;
+    // 如果游戏结束或挑战完成，停止更新
+    if (gameState === 'gameover' || gameState === 'challengeComplete') return;
 
     const isReceivingInput = handleInput();
 
@@ -908,7 +1039,7 @@ function update(dt) {
         
         // 如果没有与弹簧碰撞，则检测与平台的碰撞
         if (!springCollision) {
-            // 先检测与真实平台的碰撞
+            // 先检测与真实平台的碰撞 (包括终点平台)
             platforms.forEach(platform => {
                 // 调整玩家尺寸用于碰撞检测，基于BASE尺寸
                 const checkWidth = player.baseWidth;
@@ -920,7 +1051,7 @@ function update(dt) {
                     checkX < platform.x + platform.width &&
                     checkX + checkWidth > platform.x &&
                     checkY + checkHeight >= platform.y &&
-                    checkY + checkHeight <= platform.y + platform.height + 10) 
+                    checkY + checkHeight <= platform.y + platform.height + 10)
                 {
                     // 落在平台上
                     if (!player.isJumping) { // 仅在初次着陆时触发挤压，不是上跳时
@@ -928,20 +1059,30 @@ function update(dt) {
                     }
                     player.y = platform.y - player.baseHeight; // 基于基础高度定位
                     
+                    // --- 通关判定：如果落在终点平台 --- 
+                    if (platform.isFinish && currentGameMode === GAME_MODE.DAILY_CHALLENGE) {
+                        gameState = 'challengeComplete';
+                        console.log("Challenge Complete! Landed on Finish Platform. Final Score:", Math.floor(score / 100));
+                        // 停止玩家垂直速度，避免穿透
+                        player.vy = 0; 
+                        player.onGround = true;
+                        return; // 通关后不再检测其他碰撞
+                    }
+                    
                     // 普通跳跃力度
                     player.vy = player.jumpPower;
-                    
-                    player.isJumping = true; 
-                    player.onGround = true; 
+
+                    player.isJumping = true;
+                    player.onGround = true;
                     if (platform.type === 'breakable' || platform.type === 'movingBreakable') {
                         platform.isBroken = true;
                         platform.breakTimer = 30; // 30帧后消失
                     }
                 }
             });
-            
+
             // 如果没有与真实平台碰撞，再检测与假砖块的碰撞
-            if (!player.onGround) {
+            if (!player.onGround && gameState !== 'challengeComplete') {
                 phantomPlatforms.forEach(platform => {
                     const checkWidth = player.baseWidth;
                     const checkHeight = player.baseHeight;
@@ -970,7 +1111,7 @@ function update(dt) {
     } else {
          // 如果向上移动且不在地面，重置跳跃标志
          if (player.vy < 0) {
-            player.isJumping = false; 
+            player.isJumping = false;
          }
     }
 
@@ -995,6 +1136,9 @@ function update(dt) {
         phantomPlatforms.forEach(p => p.y += cameraOffset); // 更新假砖块位置
         clouds.forEach(c => c.y += cameraOffset * 0.5); // Clouds scroll slower for parallax effect
         score += Math.round(cameraOffset);
+
+        // --- 不再在这里检查通关 --- 
+        // if (currentGameMode === GAME_MODE.DAILY_CHALLENGE && score >= difficultyConfig.maxScore) { ... }
     }
 
     // --- Cloud Management ---
@@ -1005,11 +1149,15 @@ function update(dt) {
     let highestCloudY = clouds.length > 0 ? Math.min(...clouds.map(c => c.y)) : logicalHeight;
     // Target the top edge for generation, similar to platforms
     const generationTargetY = -cloudMaxHeight; 
+    // console.log(`[Update] Checking cloud generation. Highest Y: ${highestCloudY.toFixed(1)}, Target Y: ${generationTargetY}`); // <<< 移除此日志
     while (highestCloudY > generationTargetY) { // Keep generating until the top is filled
-        let spacing = cloudMinYSpacing + Math.random() * (cloudMaxYSpacing - cloudMinYSpacing);
+        const spacingRand = randomFunc();
+        let spacing = cloudMinYSpacing + spacingRand * (cloudMaxYSpacing - cloudMinYSpacing);
         let newY = highestCloudY - spacing;
-        // Generate cloud across the full logical width
-        createCloud(Math.random() * logicalWidth, newY);
+        const xRand = randomFunc();
+        const newX = xRand * logicalWidth;
+        // console.log(`[Update] Generating Cloud...`); // Removed
+        createCloud(newX, newY);
         highestCloudY = newY;
     }
     // --- End Cloud Management ---
@@ -1057,28 +1205,49 @@ function update(dt) {
     phantomPlatforms = phantomPlatforms.filter(p => p.y < logicalHeight);
 
     // Generate New Platforms (Based on Logical Coordinates)
-    let highestPlatformY = platforms.length > 0 ? Math.min(...platforms.map(p => p.y)) : logicalHeight;
-    const currentMinSpacing = difficultyConfig.basePlatformMinYSpacing + 
-                            (difficultyConfig.maxPlatformMinYSpacing - difficultyConfig.basePlatformMinYSpacing) * difficulty;
-    const currentMaxSpacing = difficultyConfig.basePlatformMaxYSpacing + 
-                            (difficultyConfig.maxPlatformMaxYSpacing - difficultyConfig.basePlatformMaxYSpacing) * difficulty;
+    // --- 仅在终点平台未生成时才生成新平台 (所有模式) ---
+    if (!isFinishPlatformGenerated) {
+        let highestPlatformY = platforms.length > 0 ? Math.min(...platforms.map(p => p.y)) : logicalHeight;
+        const currentMinSpacing = difficultyConfig.basePlatformMinYSpacing +
+                                (difficultyConfig.maxPlatformMinYSpacing - difficultyConfig.basePlatformMinYSpacing) * difficulty;
+        const currentMaxSpacing = difficultyConfig.basePlatformMaxYSpacing +
+                                (difficultyConfig.maxPlatformMaxYSpacing - difficultyConfig.basePlatformMaxYSpacing) * difficulty;
+        const platformGenerationTargetY = -platformHeight; // Target the top edge for generation
+        // console.log(`[Update] Checking platform generation...`); // Removed
+        while (highestPlatformY > platformGenerationTargetY) {
+            const spacingRand = randomFunc();
+            let spacing = currentMinSpacing + spacingRand * (currentMaxSpacing - currentMinSpacing);
+            let newY = highestPlatformY - spacing;
+            const xRand = randomFunc();
+            const newX = xRand * (logicalWidth - platformWidth);
+            // console.log(`[Update] Generating Platform...`); // Removed
+            createPlatform(newX, newY);
+            highestPlatformY = newY;
 
-    while (highestPlatformY > -platformHeight) {
-        let spacing = currentMinSpacing + Math.random() * (currentMaxSpacing - currentMinSpacing);
-        let newY = highestPlatformY - spacing;
-        createPlatform(Math.random() * (logicalWidth - platformWidth), newY);
-        
-        // 在这里为新的真实平台高度附近，尝试生成假砖块
-        createPhantomPlatform(newY - difficultyConfig.phantomYSpacing/2);
-        
-        highestPlatformY = newY;
+            // 在生成新平台时，有机会生成假砖块
+            createPhantomPlatform(newY);
+        }
     }
-    
+
+    // --- 生成终点平台 (仅限每日挑战) ---
+    if (currentGameMode === GAME_MODE.DAILY_CHALLENGE && !isFinishPlatformGenerated && score >= difficultyConfig.maxScore) {
+        // 找到当前最高平台的 Y 坐标
+        let highestY = platforms.length > 0 ? Math.min(...platforms.map(p => p.y)) : logicalHeight;
+        // 在最高平台上方一个合适的距离生成终点平台
+        const finishPlatformY = highestY - (difficultyConfig.basePlatformMinYSpacing + difficultyConfig.basePlatformMaxYSpacing) / 2 - 20;
+        // 将终点平台放在屏幕中央
+        const finishPlatformX = logicalWidth / 2 - platformWidth / 2;
+        createPlatform(finishPlatformX, finishPlatformY, null, true); // isFinish = true
+        isFinishPlatformGenerated = true;
+        // console.log("Finish platform generation triggered."); // 移除
+    }
+
     // Game Over Condition (Based on Logical Height)
-    if (player.y > logicalHeight) { // Game over as soon as player's top edge is below bottom
-        gameover = true;
+    // 只有在未通关的情况下才判断游戏结束
+    if (gameState !== 'challengeComplete' && player.y > logicalHeight) { // Game over as soon as player's top edge is below bottom
+        gameover = true; // 保留 gameover 标志以便兼容旧逻辑？或许可以移除
         gameState = 'gameover';
-        console.log("Game Over! Score:", Math.floor(score / 100));
+        // console.log("Game Over! Score:", Math.floor(score / 100)); // 移除?
     }
 
     // Difficulty Update - 修改难度计算和输出逻辑
@@ -1183,11 +1352,13 @@ function draw() {
                 // 绘制5-6个随机散开的小云团
                 for (let i = 0; i < 6; i++) {
                     const angle = (i / 6) * Math.PI * 2 + cloudProgress * 0.5;
+                    // <<< 使用 Math.random 用于视觉效果 >>>
                     const distance = scatterRadius * (0.5 + 0.5 * Math.random());
                     const x = centerX + Math.cos(angle) * distance;
                     const y = centerY + Math.sin(angle) * distance;
+                    // <<< 使用 Math.random 用于视觉效果 >>>
                     const size = (1 - cloudProgress * 0.7) * platformH * (0.4 + 0.3 * Math.random());
-                    
+
                     ctx.beginPath();
                     ctx.arc(x, y, size, 0, Math.PI * 2);
                     ctx.fill();
@@ -1230,11 +1401,13 @@ function draw() {
                 ctx.stroke();
                 
                 // 添加一点闪烁效果
+                // <<< 使用 Math.random 用于视觉效果 >>>
                 if (Math.random() < 0.05) {
+                    // <<< 使用 Math.random 用于视觉效果 >>>
                     const sparkX = platformX + Math.random() * platformW;
                     const sparkY = platformY + Math.random() * platformH;
                     const sparkSize = 1 + Math.random() * 2;
-                    
+
                     ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
                     ctx.beginPath();
                     ctx.arc(sparkX, sparkY, sparkSize, 0, Math.PI * 2);
@@ -1277,18 +1450,15 @@ function draw() {
                 // 移动+易碎平台 - 紫色
                 grassColor = '#E6A8D7'; // 淡紫色(顶部)
                 soilColor = '#9966CC'; // 中紫色(底部)
+            } else if (platform.type === 'finish') {
+                // --- 终点平台特殊颜色 ---
+                grassColor = '#FFD700'; // 金色
+                soilColor = '#DAA520'; // 金麒麟色
             } else {
                 // 普通平台
                 grassColor = '#90EE90'; // 淡绿色草地
                 soilColor = '#CD853F'; // 秘鲁色土壤
             }
-            
-            // 不再绘制平台外轮廓（去掉黑边）
-            // ctx.strokeStyle = 'black';
-            // ctx.lineWidth = 2;
-            // ctx.beginPath();
-            // ctx.roundRect(platformX, platformY, platformW, platformH, platformCornerRadius);
-            // ctx.stroke();
             
             // 绘制土壤(下部分)
             ctx.fillStyle = soilColor;
@@ -1304,33 +1474,35 @@ function draw() {
             ctx.fill();
             
             // 绘制低多边形效果(简化版)
-            // 草地阴影三角形
-            if (!platform.isBroken) {
-                ctx.fillStyle = 'rgba(0,0,0,0.1)';
+            if (!platform.isBroken && platform.type !== 'finish') { // 终点平台不加普通阴影
+                // ... (普通平台的阴影和高光)
+            }
+            
+            // --- 终点平台特殊效果 ---
+            if (platform.type === 'finish') {
+                // 绘制旗帜或星星等标记
+                ctx.fillStyle = 'white';
+                const flagPoleX = platformX + platformW * 0.8;
+                const flagPoleY = platformY - platformH * 0.8; // 旗杆底部在平台上方
+                const flagPoleWidth = 4;
+                const flagPoleHeight = platformH * 0.8;
+                
+                // 旗杆
+                ctx.fillRect(flagPoleX, flagPoleY, flagPoleWidth, flagPoleHeight);
+                
+                // 旗帜 (三角旗)
+                ctx.fillStyle = '#FF6347'; // 番茄红旗帜
                 ctx.beginPath();
-                ctx.moveTo(platformX + platformW * 0.2, platformY);
-                ctx.lineTo(platformX + platformW * 0.5, platformY + grassHeight);
-                ctx.lineTo(platformX, platformY + grassHeight);
+                ctx.moveTo(flagPoleX + flagPoleWidth, flagPoleY); // 右上角
+                ctx.lineTo(flagPoleX + flagPoleWidth, flagPoleY + flagPoleHeight * 0.5); // 右下角
+                ctx.lineTo(flagPoleX + flagPoleWidth - platformW * 0.2, flagPoleY + flagPoleHeight * 0.25); // 左侧顶点
                 ctx.closePath();
                 ctx.fill();
                 
-                // 草地高光三角形
-                ctx.fillStyle = 'rgba(255,255,255,0.15)';
+                // 添加闪烁效果
+                ctx.fillStyle = `rgba(255, 255, 255, ${0.6 + Math.sin(Date.now() / 200) * 0.4})`; // 白色闪烁
                 ctx.beginPath();
-                ctx.moveTo(platformX + platformW * 0.6, platformY);
-                ctx.lineTo(platformX + platformW, platformY);
-                ctx.lineTo(platformX + platformW, platformY + grassHeight * 0.7);
-                ctx.closePath();
-                ctx.fill();
-                
-                // 土壤部分阴影
-                ctx.fillStyle = 'rgba(0,0,0,0.15)';
-                ctx.beginPath();
-                ctx.moveTo(platformX, platformY + grassHeight);
-                ctx.lineTo(platformX + platformW * 0.4, platformY + grassHeight);
-                ctx.lineTo(platformX + platformW * 0.2, platformY + platformH);
-                ctx.lineTo(platformX, platformY + platformH);
-                ctx.closePath();
+                ctx.arc(platformX + platformW / 2, platformY + platformH * 0.2, platformW * 0.1, 0, Math.PI * 2);
                 ctx.fill();
             }
             
@@ -1800,7 +1972,7 @@ function drawMenu() {
                 // 随机选择一个新颜色（确保与当前颜色不同）
                 let newColorIndex;
                 do {
-                    newColorIndex = Math.floor(Math.random() * playerColors.length);
+                    newColorIndex = Math.floor(randomFunc() * playerColors.length);
                 } while (playerColors[newColorIndex] === currentPlayerColor);
                 
                 currentPlayerColor = playerColors[newColorIndex];
@@ -1924,39 +2096,64 @@ function drawMenu() {
     const titleY = Math.round(canvasHeight / 3);
     ctx.fillText('无尽跳跃', titleX, titleY);
     
-    // 绘制开始按钮
+    // ---- 按钮布局 ----
     const buttonWidth = 200;
     const buttonHeight = 60;
+    const buttonSpacing = 20; // 按钮间距
+    const totalButtonHeight = buttonHeight * 2 + buttonSpacing;
+    const startY = Math.round(canvasHeight / 2 - totalButtonHeight / 2) + 40; // 整体向下移动一点
     const buttonX = Math.round(canvasWidth / 2 - buttonWidth / 2);
-    const buttonY = Math.round(canvasHeight / 2);
-    
+
+    // --- 绘制 无尽模式 按钮 (原 开始游戏 按钮) ---
+    const endlessButtonY = startY;
+    menuButton = {
+        x: buttonX,
+        y: endlessButtonY,
+        width: buttonWidth,
+        height: buttonHeight
+    };
+
     // 按钮背景
     ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
     ctx.shadowBlur = 0;
     ctx.shadowOffsetX = 0;
     ctx.shadowOffsetY = 0;
     ctx.beginPath();
-    ctx.roundRect(buttonX, buttonY, buttonWidth, buttonHeight, 10);
+    ctx.roundRect(menuButton.x, menuButton.y, menuButton.width, menuButton.height, 10);
     ctx.fill();
-    
+
     // 按钮文字
-    ctx.fillStyle = '#4CAF50';
+    ctx.fillStyle = '#4CAF50'; // 绿色
     ctx.font = '24px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
-    const buttonTextX = Math.round(canvasWidth / 2);
-    const buttonTextY = Math.round(buttonY + buttonHeight / 2);
-    ctx.fillText('开始游戏', buttonTextX, buttonTextY);
-    
-    // 存储按钮位置信息（用于点击检测）
-    menuButton = {
+    const endlessTextX = Math.round(canvasWidth / 2);
+    const endlessTextY = Math.round(endlessButtonY + buttonHeight / 2);
+    ctx.fillText('无尽模式', endlessTextX, endlessTextY);
+
+    // --- 绘制 每日挑战 按钮 ---
+    const dailyButtonY = startY + buttonHeight + buttonSpacing;
+    dailyChallengeButton = {
         x: buttonX,
-        y: buttonY,
+        y: dailyButtonY,
         width: buttonWidth,
         height: buttonHeight
     };
-    
+
+    // 按钮背景 (不同颜色区分)
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+    ctx.beginPath();
+    ctx.roundRect(dailyChallengeButton.x, dailyChallengeButton.y, dailyChallengeButton.width, dailyChallengeButton.height, 10);
+    ctx.fill();
+
+    // 按钮文字
+    ctx.fillStyle = '#FF9800'; // 橙色
+    // ctx.font = '24px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif'; // Font already set
+    const dailyTextX = Math.round(canvasWidth / 2);
+    const dailyTextY = Math.round(dailyButtonY + buttonHeight / 2);
+    ctx.fillText('每日挑战', dailyTextX, dailyTextY);
+
     // 恢复上下文
     ctx.restore();
-    
+
     // 更新云朵位置（缓慢移动）
     clouds.forEach(cloud => {
         cloud.x += cloud.speed * cloud.direction;
@@ -2066,10 +2263,86 @@ function drawGameOver() {
     ctx.restore();
 }
 
+// --- 绘制每日挑战完成界面 ---
+function drawChallengeComplete() {
+    // 绘制半透明覆盖层
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)'; 
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+    // 绘制祝贺文字
+    ctx.save();
+    ctx.fillStyle = '#FFD700'; // 金色
+    ctx.font = 'bold 48px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    
+    // 阴影效果
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+    ctx.shadowBlur = 5;
+    ctx.shadowOffsetX = 2;
+    ctx.shadowOffsetY = 2;
+    
+    // 抗锯齿
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    
+    // 文字位置
+    const textX = Math.round(canvasWidth / 2);
+    const textY = Math.round(canvasHeight / 2 - 80);
+    ctx.fillText('挑战完成!', textX, textY);
+    
+    // 显示最终得分 (每日挑战模式下 score 可能超过 maxScore)
+    ctx.font = 'bold 36px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = 'white'; // 白色得分
+    // 使用 score 计算，而不是 displayScore，因为可能超过50
+    const finalDisplayScore = Math.floor(score / 100); 
+    ctx.fillText(`得分: ${finalDisplayScore}`, Math.round(canvasWidth / 2), Math.round(canvasHeight / 2 - 20));
+    
+    // --- 添加回到主界面的按钮 (复用游戏结束界面的逻辑) ---
+    const buttonWidth = 200;
+    const buttonHeight = 50;
+    const buttonX = Math.round(canvasWidth / 2 - buttonWidth / 2);
+    // 将按钮放在下方一点
+    const menuButtonY = Math.round(canvasHeight / 2 + 50); 
+    
+    // 按钮背景
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    ctx.beginPath();
+    ctx.roundRect(buttonX, menuButtonY, buttonWidth, buttonHeight, 10);
+    ctx.fill();
+    
+    // 边框
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    
+    // 按钮文字
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#27ae60'; // 绿色
+    ctx.font = '24px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillText('回到主界面', Math.round(canvasWidth / 2), Math.round(menuButtonY + buttonHeight / 2));
+    
+    // 存储按钮位置信息（复用 gameOverMenuButton 变量）
+    // 注意：这可能导致在点击处理时需要区分状态
+    // 或者创建一个新的变量 challengeCompleteMenuButton
+    gameOverMenuButton = { // 复用此变量，简化处理
+        x: buttonX,
+        y: menuButtonY,
+        width: buttonWidth,
+        height: buttonHeight
+    };
+    
+    ctx.restore();
+    console.log("绘制挑战完成界面 Score:", Math.floor(score / 100)); // 保留这个?
+}
+
 // --- Game Loop ---
 let lastTime = 0;
 let gameLoopRunning = false;
 let menuButton = null; // 存储菜单按钮位置信息
+let dailyChallengeButton = null; // <<< 添加：存储每日挑战按钮位置信息
 let menuPlayerHitbox = null; // 存储菜单中玩家角色的位置信息
 let gameOverRestartButton = null; // 存储游戏结束界面重新开始按钮位置
 let gameOverMenuButton = null; // 存储游戏结束界面回到主界面按钮位置
@@ -2086,15 +2359,12 @@ let playerMenuAnimation = {
 // 添加玩家角色点击动画
 function triggerPlayerAnimation() {
     if (!playerMenuAnimation.active) {
-        // 随机选择一种动画类型
-        const animations = ['jump', 'spin', 'bounce', 'color'];
-        const randomAnimation = animations[Math.floor(Math.random() * animations.length)];
-        
         playerMenuAnimation.active = true;
-        playerMenuAnimation.type = randomAnimation;
         playerMenuAnimation.timer = 0;
-        
-        console.log("触发角色动画:", randomAnimation);
+        // 随机选择一个动画类型
+        const animations = ['jump', 'spin', 'bounce', 'color'];
+        const randomAnimation = animations[Math.floor(randomFunc() * animations.length)];
+        playerMenuAnimation.type = randomAnimation;
     }
 }
 
@@ -2110,13 +2380,16 @@ function gameLoop(timestamp) {
     } else if (gameState === 'playing') {
         update(deltaTime / 1000);
         draw();
-        if (gameover) {
-            gameState = 'gameover';
-            console.log("游戏结束，状态切换到gameover");
-        }
+        // gameover 或 challengeComplete 状态的切换在 update 函数内部处理
     } else if (gameState === 'gameover') {
-        draw();
+        // 游戏结束状态下只绘制，不更新
+        draw(); // 继续绘制游戏场景背景
         drawGameOver();
+    } else if (gameState === 'challengeComplete') {
+        // 挑战完成状态下只绘制，不更新
+        // 可以选择只绘制完成界面，或者像 gameover 一样绘制背景+完成界面
+        draw(); // 继续绘制游戏场景背景
+        drawChallengeComplete(); 
     }
 
     requestAnimationFrame(gameLoop);
@@ -2137,10 +2410,17 @@ canvas.addEventListener('click', (e) => {
     const rect = canvas.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const clickY = e.clientY - rect.top;
-    
+
     if (gameState === 'menu') {
         if (menuButton && isInsideButton(clickX, clickY, menuButton)) {
-            // 点击了开始按钮
+            // 点击了 无尽模式 按钮
+            console.log("Clicked Endless Mode Button");
+            currentGameMode = GAME_MODE.ENDLESS;
+            init();
+        } else if (dailyChallengeButton && isInsideButton(clickX, clickY, dailyChallengeButton)) {
+            // 点击了 每日挑战 按钮
+            console.log("Clicked Daily Challenge Button");
+            currentGameMode = GAME_MODE.DAILY_CHALLENGE;
             init();
         } else if (menuPlayerHitbox && isInsideButton(clickX, clickY, menuPlayerHitbox)) {
             // 点击了玩家角色
@@ -2155,51 +2435,82 @@ canvas.addEventListener('click', (e) => {
             // 点击了回到主界面按钮
             initMenu();
         }
+    } else if (gameState === 'challengeComplete') {
+        // 检查是否点击了回到主界面按钮 (复用了 gameOverMenuButton)
+        if (gameOverMenuButton && isInsideButton(clickX, clickY, gameOverMenuButton)) {
+            console.log("Clicked Back to Menu (Challenge Complete)");
+            initMenu();
+        }
     }
 });
 
 // Touchend listener for mobile
 canvas.addEventListener('touchend', (e) => {
     e.preventDefault();
-    
+
     if (gameState === 'menu') {
         const touch = e.changedTouches[0];
         const rect = canvas.getBoundingClientRect();
         const touchX = touch.clientX - rect.left;
         const touchY = touch.clientY - rect.top;
-        
+
+        // 检查点击的是哪个按钮
         if (menuButton && isInsideButton(touchX, touchY, menuButton)) {
-            // 点击了开始按钮
+            // 点击了 无尽模式 按钮
+            console.log("Touched Endless Mode Button (Mobile)");
+            currentGameMode = GAME_MODE.ENDLESS;
             init();
+        } else if (dailyChallengeButton && isInsideButton(touchX, touchY, dailyChallengeButton)) {
+             // 点击了 每日挑战 按钮
+             console.log("Touched Daily Challenge Button (Mobile)");
+             currentGameMode = GAME_MODE.DAILY_CHALLENGE;
+             init();
         } else if (menuPlayerHitbox && isInsideButton(touchX, touchY, menuPlayerHitbox)) {
             // 触摸了玩家角色
             triggerPlayerAnimation();
         }
         return;
     }
-    
+
     if (gameState === 'gameover') {
         const touch = e.changedTouches[0];
         const rect = canvas.getBoundingClientRect();
         const touchX = touch.clientX - rect.left;
         const touchY = touch.clientY - rect.top;
-        
+
         // 检查触摸的是哪个按钮
         if (gameOverRestartButton && isInsideButton(touchX, touchY, gameOverRestartButton)) {
-            // 触摸了重新开始按钮
+            // 触摸了重新开始按钮，重新开始当前模式
             init();
         } else if (gameOverMenuButton && isInsideButton(touchX, touchY, gameOverMenuButton)) {
             // 触摸了回到主界面按钮
             initMenu();
         }
-        
+
         // 重置触摸状态
         isTouching = false;
         touchStartX = null;
         joystickActive = false;
         return;
+    } else if (gameState === 'challengeComplete') {
+        // 检查是否触摸了回到主界面按钮
+        const touch = e.changedTouches[0];
+        const rect = canvas.getBoundingClientRect();
+        const touchX = touch.clientX - rect.left;
+        const touchY = touch.clientY - rect.top;
+        
+        if (gameOverMenuButton && isInsideButton(touchX, touchY, gameOverMenuButton)) {
+            console.log("Touched Back to Menu (Challenge Complete)");
+            initMenu();
+        }
+        
+        // 重置触摸状态（以防万一）
+        isTouching = false;
+        touchStartX = null;
+        joystickActive = false;
+        return;
     }
-    
+
     // 游戏中的触摸控制
     if (joystickActive) {
         joystickActive = false;
@@ -2302,24 +2613,33 @@ function createPhantomPlatform(targetY) {
         (1 - difficultyConfig.phantomThreshold));
     
     // 随机决定是否生成假砖块
-    if (Math.random() > phantomProb) {
+    const shouldGenerateRand = randomFunc(); // 消耗1个随机数
+    // console.log(`[createPhantom@targetY=${targetY.toFixed(1)}] Prob Rand: ${shouldGenerateRand.toFixed(8)}, Threshold: ${phantomProb.toFixed(3)}`); // Log removed
+    if (shouldGenerateRand > phantomProb) { 
+        // console.log(`[createPhantom@targetY=${targetY.toFixed(1)}] Skipped generation (prob check)`); // Log removed
         return;
     }
     
     // 确定本次生成数量
-    const generateCount = Math.floor(Math.random() * 
+    const countRand = randomFunc(); // 消耗1个随机数
+    const generateCount = Math.floor(countRand * 
         (difficultyConfig.phantomMaxPerGeneration - difficultyConfig.phantomMinPerGeneration + 1)) + 
         difficultyConfig.phantomMinPerGeneration;
-    
+    // console.log(`[createPhantom@targetY=${targetY.toFixed(1)}] Count Rand: ${countRand.toFixed(8)}, Count: ${generateCount}`); // Log removed
+
     // 生成多个假砖块
-    for (let i = 0; i < generateCount; i++) {
+    for (let i = 0; i < generateCount; i++) { // 严格循环 generateCount 次
         // 确定生成位置 - 在指定的高度附近生成
         const minY = targetY - 40; // 高度范围上限
         const maxY = targetY + 40; // 高度范围下限
         
-        const randomY = minY + Math.random() * (maxY - minY);
-        const randomX = Math.random() * (logicalWidth - phantomPlatformWidth);
-        
+        // --- 关键修改：总是消耗随机数 --- 
+        const randomYRand = randomFunc(); // 消耗1个随机数 (Y坐标)
+        const randomY = minY + randomYRand * (maxY - minY);
+        const randomXRand = randomFunc(); // 消耗1个随机数 (X坐标)
+        const randomX = randomXRand * (logicalWidth - phantomPlatformWidth); 
+        // console.log(`[createPhantom@targetY=${targetY.toFixed(1)}] Attempt #${i+1}: Y Rand: ${randomYRand.toFixed(8)}, Y: ${randomY.toFixed(1)}, X Rand: ${randomXRand.toFixed(8)}, X: ${randomX.toFixed(1)}`); // Log removed
+
         // 避免在真实平台附近生成假砖块
         let tooClose = false;
         platforms.forEach(platform => {
@@ -2331,6 +2651,12 @@ function createPhantomPlatform(targetY) {
             }
         });
         
+        // 如果离真实平台太近，则跳过本次添加，但随机数已消耗
+        if (tooClose) {
+            // console.log(`[createPhantom@targetY=${targetY.toFixed(1)}] Attempt #${i+1}: Skipped (too close to real platform)`); // Log removed
+            continue; 
+        }
+        
         // 避免与已存在的假砖块重叠
         phantomPlatforms.forEach(phantom => {
             const distX = Math.abs((randomX + phantomPlatformWidth/2) - (phantom.x + phantom.width/2));
@@ -2340,18 +2666,23 @@ function createPhantomPlatform(targetY) {
                 tooClose = true;
             }
         });
-        
-        if (!tooClose) {
-            // 创建假砖块对象
-            phantomPlatforms.push({
-                x: randomX,
-                y: randomY,
-                width: phantomPlatformWidth,
-                height: phantomPlatformHeight,
-                isBroken: false,
-                fadeTimer: 0,
-                opacity: 1.0
-            });
+
+        // 如果离其他假砖块太近，则跳过本次添加，但随机数已消耗
+        if (tooClose) {
+            // console.log(`[createPhantom@targetY=${targetY.toFixed(1)}] Attempt #${i+1}: Skipped (too close to other phantom)`); // Log removed
+            continue;
         }
+        
+        // 只有在检查通过后才创建并添加假砖块对象
+        // console.log(`[createPhantom@targetY=${targetY.toFixed(1)}] Attempt #${i+1}: Added Phantom Platform`); // Log removed
+        phantomPlatforms.push({
+            x: randomX,
+            y: randomY,
+            width: phantomPlatformWidth,
+            height: phantomPlatformHeight,
+            isBroken: false,
+            fadeTimer: 0,
+            opacity: 1.0
+        });
     }
 }
