@@ -61,7 +61,7 @@ function useDefaultRandom() {
 // ===== 难度配置（统一管理所有难度相关参数） =====
 const difficultyConfig = {
     // 基础难度计算
-    maxScore: 5000,                   // 达到最大难度所需的分数（像素高度）
+    maxScore: 5000,                   // 恢复正常通关分数
     
     // 平台类型阈值
     movingThreshold: 0.2,             // 移动平台出现的难度阈值
@@ -138,6 +138,10 @@ let previousDifficulty = 0; // 用于跟踪难度变化
 // --- 每日挑战终点平台相关 ---
 let isFinishPlatformGenerated = false;
 let finishPlatform = null;
+
+// --- 挑战完成礼花效果 ---
+let confettiParticles = [];
+const confettiColors = ['#f44336', '#e91e63', '#9c27b0', '#673ab7', '#3f51b5', '#2196f3', '#03a9f4', '#00bcd4', '#009688', '#4caf50', '#8bc34a', '#cddc39', '#ffeb3b', '#ffc107', '#ff9800', '#ff5722', '#795548', '#9e9e9e', '#607d8b'];
 
 // 云朵数组和参数
 let clouds = [];
@@ -308,6 +312,7 @@ function init() {
     phantomPlatforms = []; // 清空假砖块
     isFinishPlatformGenerated = false; // <<< 重置终点平台状态
     finishPlatform = null;             // <<< 重置终点平台对象
+    confettiParticles = []; // 重置礼花
     // 移除phantomGenerationTimer的重置
     
     // 保留现有的玩家位置、颜色和第一个平台
@@ -399,6 +404,7 @@ function initMenu() {
     phantomPlatforms = []; // 清空假砖块数组
     isFinishPlatformGenerated = false; // <<< 重置终点平台状态
     finishPlatform = null;             // <<< 重置终点平台对象
+    confettiParticles = []; // 重置礼花
     // 移除phantomGenerationTimer的重置
     useDefaultRandom(); // Menu always uses default random
     
@@ -700,9 +706,9 @@ function drawCloudShape(ctx, x, y, size, cloudType) {
 document.addEventListener('keydown', (e) => {
     // 在菜单状态下按Enter或空格开始游戏
     if (gameState === 'menu' && (e.code === 'Enter' || e.code === 'Space')) {
-        // 默认启动无尽模式
-        console.log("Keydown: Starting Endless Mode");
-        currentGameMode = GAME_MODE.ENDLESS;
+        // 默认启动每日挑战模式
+        console.log("Keydown: Starting Daily Challenge Mode");
+        currentGameMode = GAME_MODE.DAILY_CHALLENGE;
         init();
         return;
     }
@@ -781,17 +787,17 @@ canvas.addEventListener('touchend', (e) => {
 
         // 检查点击的是哪个按钮
         if (menuButton && isInsideButton(touchX, touchY, menuButton)) {
-            // 点击了 无尽模式 按钮
-            console.log("Touched Endless Mode Button");
-            currentGameMode = GAME_MODE.ENDLESS;
-            init();
-        } else if (dailyChallengeButton && isInsideButton(touchX, touchY, dailyChallengeButton)) {
-            // 点击了 每日挑战 按钮
-            console.log("Touched Daily Challenge Button");
+            // 点击了 每日挑战 按钮 (主按钮)
+            console.log("Touched Daily Challenge Button (Mobile)");
             currentGameMode = GAME_MODE.DAILY_CHALLENGE;
             init();
+        } else if (secondaryButton && isInsideButton(touchX, touchY, secondaryButton)) {
+            // 点击了 无尽模式 按钮 (次要按钮)
+             console.log("Touched Endless Mode Button (Mobile)");
+             currentGameMode = GAME_MODE.ENDLESS;
+             init();
         } else if (menuPlayerHitbox && isInsideButton(touchX, touchY, menuPlayerHitbox)) {
-            // 点击了玩家角色
+            // 触摸了玩家角色
             triggerPlayerAnimation();
         }
         return;
@@ -911,7 +917,13 @@ function handleInput() {
 // --- Game Logic Update (Use Logical Dimensions) ---
 function update(dt) {
     // 如果游戏结束或挑战完成，停止更新
-    if (gameState === 'gameover' || gameState === 'challengeComplete') return;
+    if (gameState === 'gameover' || gameState === 'challengeComplete') {
+        // 但在挑战完成时，我们仍需更新礼花
+        if (gameState === 'challengeComplete') {
+            updateConfetti(dt);
+        }
+        return;
+    }
 
     const isReceivingInput = handleInput();
 
@@ -1063,7 +1075,7 @@ function update(dt) {
                     if (platform.isFinish && currentGameMode === GAME_MODE.DAILY_CHALLENGE) {
                         gameState = 'challengeComplete';
                         console.log("Challenge Complete! Landed on Finish Platform. Final Score:", Math.floor(score / 100));
-                        // 停止玩家垂直速度，避免穿透
+                        createConfetti(); // <<< 在这里触发礼花生成
                         player.vy = 0; 
                         player.onGround = true;
                         return; // 通关后不再检测其他碰撞
@@ -1499,11 +1511,11 @@ function draw() {
                 ctx.closePath();
                 ctx.fill();
                 
-                // 添加闪烁效果
-                ctx.fillStyle = `rgba(255, 255, 255, ${0.6 + Math.sin(Date.now() / 200) * 0.4})`; // 白色闪烁
-                ctx.beginPath();
-                ctx.arc(platformX + platformW / 2, platformY + platformH * 0.2, platformW * 0.1, 0, Math.PI * 2);
-                ctx.fill();
+                // --- 移除闪烁效果 ---
+                // ctx.fillStyle = `rgba(255, 255, 255, ${0.6 + Math.sin(Date.now() / 200) * 0.4})`; // 白色闪烁
+                // ctx.beginPath();
+                // ctx.arc(platformX + platformW / 2, platformY + platformH * 0.2, platformW * 0.1, 0, Math.PI * 2);
+                // ctx.fill();
             }
             
             // 为上下移动平台添加特殊标记
@@ -2069,9 +2081,8 @@ function drawMenu() {
     // 恢复上下文
     ctx.restore();
     
-    // 绘制半透明覆盖层
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
-    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    // 恢复上下文
+    ctx.restore();
     
     // 绘制游戏标题
     ctx.save();
@@ -2096,62 +2107,108 @@ function drawMenu() {
     const titleY = Math.round(canvasHeight / 3);
     ctx.fillText('无尽跳跃', titleX, titleY);
     
-    // ---- 按钮布局 ----
-    const buttonWidth = 200;
-    const buttonHeight = 60;
-    const buttonSpacing = 20; // 按钮间距
-    const totalButtonHeight = buttonHeight * 2 + buttonSpacing;
-    const startY = Math.round(canvasHeight / 2 - totalButtonHeight / 2) + 40; // 整体向下移动一点
-    const buttonX = Math.round(canvasWidth / 2 - buttonWidth / 2);
+    // ---- 按钮布局 (每日挑战为主，无尽模式为辅) ----
+    const mainButtonWidth = 200;
+    const mainButtonHeight = 60;
+    const secondaryButtonWidth = 160; // 无尽模式按钮稍小
+    const secondaryButtonHeight = 45;
+    const buttonSpacing = 15;
+    
+    const mainButtonY = Math.round(canvasHeight / 2) - 10; // 主要按钮在中间偏上
+    const secondaryButtonY = mainButtonY + mainButtonHeight + buttonSpacing; // 次要按钮在下方
+    
+    const mainButtonX = Math.round(canvasWidth / 2 - mainButtonWidth / 2);
+    const secondaryButtonX = Math.round(canvasWidth / 2 - secondaryButtonWidth / 2);
 
-    // --- 绘制 无尽模式 按钮 (原 开始游戏 按钮) ---
-    const endlessButtonY = startY;
-    menuButton = {
-        x: buttonX,
-        y: endlessButtonY,
-        width: buttonWidth,
-        height: buttonHeight
+    // --- 绘制 每日挑战 按钮 (主按钮) ---
+    menuButton = { // 使用 menuButton 存储主按钮信息
+        x: mainButtonX,
+        y: mainButtonY,
+        width: mainButtonWidth,
+        height: mainButtonHeight
     };
 
-    // 按钮背景
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 0;
+    // 主按钮样式 (主要动作 - 恢复橙黄色)
+    const mainButtonColor = '#FF9800'; // 橙色
+    const mainButtonShadowColor = '#E68A00'; // 深橙色
+    const buttonCornerRadius = 10;
+    const innerShadowHeight = 4; // 内阴影高度
+
+    // 绘制按钮主体 (需要先定义路径用于裁剪和填充)
     ctx.beginPath();
-    ctx.roundRect(menuButton.x, menuButton.y, menuButton.width, menuButton.height, 10);
-    ctx.fill();
+    ctx.roundRect(menuButton.x, menuButton.y, menuButton.width, menuButton.height, buttonCornerRadius);
+    
+    // 绘制底部内阴影 (在主体填充之前)
+    ctx.save();
+    ctx.clip(); // 限制绘制在圆角矩形内
+    ctx.fillStyle = mainButtonShadowColor;
+    ctx.fillRect(menuButton.x, menuButton.y + menuButton.height - innerShadowHeight, menuButton.width, innerShadowHeight);
+    ctx.restore(); // 恢复绘图状态，移除裁剪
+    
+    // 填充按钮主色
+    ctx.fillStyle = mainButtonColor;
+    ctx.fill(); // 这里会填充之前定义的 roundRect 路径
 
-    // 按钮文字
-    ctx.fillStyle = '#4CAF50'; // 绿色
-    ctx.font = '24px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
-    const endlessTextX = Math.round(canvasWidth / 2);
-    const endlessTextY = Math.round(endlessButtonY + buttonHeight / 2);
-    ctx.fillText('无尽模式', endlessTextX, endlessTextY);
+    // 主按钮文字 ("每日挑战")
+    ctx.fillStyle = 'white'; // 白色文字
+    ctx.font = 'bold 24px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif'; // 加粗
+    ctx.textAlign = 'center'; 
+    ctx.textBaseline = 'middle'; // 确保垂直居中
+    const mainTextX = Math.round(mainButtonX + mainButtonWidth / 2);
+    const mainTextY = Math.round(mainButtonY + mainButtonHeight / 2);
+    // 绘制文字阴影以增加对比度
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.2)';
+    ctx.shadowBlur = 2;
+    ctx.shadowOffsetX = 1;
+    ctx.shadowOffsetY = 1;
+    ctx.fillText('每日挑战', mainTextX, mainTextY);
+    ctx.shadowColor = 'transparent'; // 清除文字阴影
 
-    // --- 绘制 每日挑战 按钮 ---
-    const dailyButtonY = startY + buttonHeight + buttonSpacing;
-    dailyChallengeButton = {
-        x: buttonX,
-        y: dailyButtonY,
-        width: buttonWidth,
-        height: buttonHeight
+    // --- 绘制 无尽模式 按钮 (次要按钮) ---
+    secondaryButton = { // 使用 secondaryButton 存储次要按钮信息
+        x: secondaryButtonX,
+        y: secondaryButtonY,
+        width: secondaryButtonWidth,
+        height: secondaryButtonHeight
     };
 
-    // 按钮背景 (不同颜色区分)
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+    // 次要按钮样式 (次要动作 - 较深的柔和蓝绿色)
+    const secondaryButtonColor = '#48C9B0'; // 使用较深的蓝绿色
+    const secondaryButtonShadowColor = '#369F8C'; // 更深的阴影色
+    const secondaryCornerRadius = 8;
+    const secondaryInnerShadowHeight = 3;
+    
+    // 绘制按钮主体
     ctx.beginPath();
-    ctx.roundRect(dailyChallengeButton.x, dailyChallengeButton.y, dailyChallengeButton.width, dailyChallengeButton.height, 10);
+    ctx.roundRect(secondaryButton.x, secondaryButton.y, secondaryButton.width, secondaryButton.height, secondaryCornerRadius);
+    
+    // 绘制底部内阴影
+    ctx.save();
+    ctx.clip();
+    ctx.fillStyle = secondaryButtonShadowColor;
+    ctx.fillRect(secondaryButton.x, secondaryButton.y + secondaryButton.height - secondaryInnerShadowHeight, secondaryButton.width, secondaryInnerShadowHeight);
+    ctx.restore();
+    
+    // 填充按钮主色
+    ctx.fillStyle = secondaryButtonColor;
     ctx.fill();
 
-    // 按钮文字
-    ctx.fillStyle = '#FF9800'; // 橙色
-    // ctx.font = '24px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif'; // Font already set
-    const dailyTextX = Math.round(canvasWidth / 2);
-    const dailyTextY = Math.round(dailyButtonY + buttonHeight / 2);
-    ctx.fillText('每日挑战', dailyTextX, dailyTextY);
+    // 次要按钮文字 ("无尽模式")
+    ctx.fillStyle = 'white'; // 白色文字
+    ctx.font = 'bold 18px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif'; // 加粗，字体稍小
+    ctx.textAlign = 'center'; 
+    ctx.textBaseline = 'middle';
+    const secondaryTextX = Math.round(secondaryButtonX + secondaryButtonWidth / 2);
+    const secondaryTextY = Math.round(secondaryButtonY + secondaryButtonHeight / 2);
+    // 添加文字阴影
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.2)';
+    ctx.shadowBlur = 2;
+    ctx.shadowOffsetX = 1;
+    ctx.shadowOffsetY = 1;
+    ctx.fillText('无尽模式', secondaryTextX, secondaryTextY);
+    ctx.shadowColor = 'transparent'; // 清除文字阴影
 
-    // 恢复上下文
+    // 恢复上下文 (这个 restore 是恢复标题绘制之前的状态)
     ctx.restore();
 
     // 更新云朵位置（缓慢移动）
@@ -2202,75 +2259,119 @@ function drawGameOver() {
     const buttonHeight = 50;
     const buttonX = Math.round(canvasWidth / 2 - buttonWidth / 2);
     const buttonY = Math.round(canvasHeight / 2 + 30);
+    const buttonCornerRadius = 10;
+    const innerShadowHeight = 4;
     
-    // 按钮背景 - 使用稍微带透明的柔和颜色
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 0;
+    // 按钮样式 (重新开始 - 橙黄色)
+    const restartButtonColor = '#FF9800'; 
+    const restartButtonShadowColor = '#E68A00'; 
+
+    // 绘制按钮主体
     ctx.beginPath();
-    ctx.roundRect(buttonX, buttonY, buttonWidth, buttonHeight, 10);
+    ctx.roundRect(buttonX, buttonY, buttonWidth, buttonHeight, buttonCornerRadius);
+
+    // 绘制内阴影
+    ctx.save();
+    ctx.clip();
+    ctx.fillStyle = restartButtonShadowColor;
+    ctx.fillRect(buttonX, buttonY + buttonHeight - innerShadowHeight, buttonWidth, innerShadowHeight);
+    ctx.restore();
+
+    // 填充主色
+    ctx.fillStyle = restartButtonColor;
     ctx.fill();
     
-    // 为按钮添加轻微的边框，增加立体感
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    // 移除边框
+    // ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+    // ctx.lineWidth = 2;
+    // ctx.stroke();
     
-    // 设置文本基线为居中
+    // 按钮文字
     ctx.textBaseline = 'middle';
-    
-    // 按钮文字 - 使用更柔和的颜色
-    ctx.fillStyle = '#3498db'; // 使用柔和的蓝色
-    ctx.font = '24px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
-    // 移除额外的偏移，使文字垂直居中
+    ctx.fillStyle = 'white'; 
+    ctx.font = 'bold 24px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center'; 
+    // 添加文字阴影
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.2)';
+    ctx.shadowBlur = 2;
+    ctx.shadowOffsetX = 1;
+    ctx.shadowOffsetY = 1;
     ctx.fillText('重新开始', Math.round(canvasWidth / 2), Math.round(buttonY + buttonHeight / 2));
-    
-    // 存储按钮位置信息（用于点击检测）
-    gameOverRestartButton = {
-        x: buttonX,
-        y: buttonY,
-        width: buttonWidth,
-        height: buttonHeight
-    };
+    ctx.shadowColor = 'transparent'; // 清除文字阴影
+
+    // 存储按钮位置信息
+    gameOverRestartButton = { x: buttonX, y: buttonY, width: buttonWidth, height: buttonHeight };
     
     // 回到主界面按钮
     const menuButtonY = buttonY + buttonHeight + 20; // 在第一个按钮下方
-    
-    // 按钮背景
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+    const menuButtonColor = '#48C9B0'; // 改为较深的蓝绿色
+    const menuButtonShadowColor = '#369F8C'; // 更深的阴影色
+
+    // 绘制按钮主体
     ctx.beginPath();
-    ctx.roundRect(buttonX, menuButtonY, buttonWidth, buttonHeight, 10);
+    ctx.roundRect(buttonX, menuButtonY, buttonWidth, buttonHeight, buttonCornerRadius);
+
+    // 内阴影
+    ctx.save();
+    ctx.clip();
+    ctx.fillStyle = menuButtonShadowColor;
+    ctx.fillRect(buttonX, menuButtonY + buttonHeight - innerShadowHeight, buttonWidth, innerShadowHeight);
+    ctx.restore();
+
+    // 填充主色
+    ctx.fillStyle = menuButtonColor;
     ctx.fill();
     
-    // 边框
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-    ctx.stroke();
+    // 移除边框
+    // ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+    // ctx.stroke();
     
     // 按钮文字
-    ctx.fillStyle = '#27ae60'; // 使用柔和的绿色
-    // 移除额外的偏移，使文字垂直居中
+    ctx.fillStyle = 'white';
+    ctx.textAlign = 'center'; 
+    // 添加文字阴影
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.2)';
+    ctx.shadowBlur = 2;
+    ctx.shadowOffsetX = 1;
+    ctx.shadowOffsetY = 1;
     ctx.fillText('回到主界面', Math.round(canvasWidth / 2), Math.round(menuButtonY + buttonHeight / 2));
-    
+    ctx.shadowColor = 'transparent';
+
     // 存储回到主界面按钮位置
-    gameOverMenuButton = {
-        x: buttonX,
-        y: menuButtonY,
-        width: buttonWidth,
-        height: buttonHeight
-    };
+    gameOverMenuButton = { x: buttonX, y: menuButtonY, width: buttonWidth, height: buttonHeight };
     
-    ctx.restore();
+    ctx.restore(); // 恢复游戏结束文字绘制前的状态
 }
 
 // --- 绘制每日挑战完成界面 ---
 function drawChallengeComplete() {
-    // 绘制半透明覆盖层
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)'; 
-    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
-
-    // 绘制祝贺文字
+    // 保存当前可能存在的变换状态 (来自 draw())
     ctx.save();
+    
+    // 重置变换，确保我们在屏幕坐标系下绘制
+    // 获取当前的设备像素比，因为 setTransform 会重置它
+    const dpr = window.devicePixelRatio || 1;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // 恢复默认变换并应用DPR缩放
+
+    // --- 现在开始绘制通关界面元素 ---
+    
+    // 1. 绘制半透明覆盖层 (覆盖整个屏幕)
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)'; 
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight); // 使用物理画布宽高
+
+    // 2. 绘制礼花 (在覆盖层之上)
+    confettiParticles.forEach(p => {
+        ctx.save();
+        // 礼花坐标已经是屏幕坐标，直接使用
+        ctx.translate(p.x + p.width / 2, p.y + p.height / 2);
+        ctx.rotate(p.rotation * Math.PI / 180);
+        ctx.fillStyle = p.color;
+        ctx.fillRect(-p.width / 2, -p.height / 2, p.width, p.height);
+        ctx.restore();
+    });
+
+    // 3. 绘制祝贺文字 (在礼花之上)
+    ctx.save(); // 保存文字绘制状态
     ctx.fillStyle = '#FFD700'; // 金色
     ctx.font = 'bold 48px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
     ctx.textAlign = 'center';
@@ -2285,64 +2386,86 @@ function drawChallengeComplete() {
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     
-    // 文字位置
+    // 文字位置 (使用物理画布宽高计算居中)
     const textX = Math.round(canvasWidth / 2);
     const textY = Math.round(canvasHeight / 2 - 80);
     ctx.fillText('挑战完成!', textX, textY);
     
-    // 显示最终得分 (每日挑战模式下 score 可能超过 maxScore)
+    // 显示最终得分
     ctx.font = 'bold 36px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
     ctx.fillStyle = 'white'; // 白色得分
-    // 使用 score 计算，而不是 displayScore，因为可能超过50
     const finalDisplayScore = Math.floor(score / 100); 
     ctx.fillText(`得分: ${finalDisplayScore}`, Math.round(canvasWidth / 2), Math.round(canvasHeight / 2 - 20));
     
-    // --- 添加回到主界面的按钮 (复用游戏结束界面的逻辑) ---
+    // 恢复文字的上下文，不影响按钮绘制
+    ctx.restore(); 
+
+    // 4. 绘制按钮 (在礼花和文字之上)
+    ctx.save(); // 保存按钮绘制状态
     const buttonWidth = 200;
     const buttonHeight = 50;
     const buttonX = Math.round(canvasWidth / 2 - buttonWidth / 2);
-    // 将按钮放在下方一点
     const menuButtonY = Math.round(canvasHeight / 2 + 50); 
+    const buttonCornerRadius = 10;
+    const innerShadowHeight = 4;
     
-    // 按钮背景
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 0;
+    // 按钮样式 (参考绿色)
+    const buttonColor = '#4CAF50';
+    const buttonShadowColor = '#388E3C';
+
+    // 绘制按钮主体
     ctx.beginPath();
-    ctx.roundRect(buttonX, menuButtonY, buttonWidth, buttonHeight, 10);
+    ctx.roundRect(buttonX, menuButtonY, buttonWidth, buttonHeight, buttonCornerRadius);
+
+    // 内阴影
+    ctx.save();
+    ctx.clip();
+    ctx.fillStyle = buttonShadowColor;
+    ctx.fillRect(buttonX, menuButtonY + buttonHeight - innerShadowHeight, buttonWidth, innerShadowHeight);
+    ctx.restore();
+    
+    // 填充主色
+    ctx.fillStyle = buttonColor;
     ctx.fill();
     
-    // 边框
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    // 移除边框
+    // ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+    // ctx.lineWidth = 2;
+    // ctx.stroke();
     
     // 按钮文字
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#27ae60'; // 绿色
-    ctx.font = '24px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = 'white'; 
+    ctx.font = 'bold 24px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center'; 
+    // 添加文字阴影
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.2)';
+    ctx.shadowBlur = 2;
+    ctx.shadowOffsetX = 1;
+    ctx.shadowOffsetY = 1;
     ctx.fillText('回到主界面', Math.round(canvasWidth / 2), Math.round(menuButtonY + buttonHeight / 2));
+    ctx.shadowColor = 'transparent';
     
-    // 存储按钮位置信息（复用 gameOverMenuButton 变量）
-    // 注意：这可能导致在点击处理时需要区分状态
-    // 或者创建一个新的变量 challengeCompleteMenuButton
-    gameOverMenuButton = { // 复用此变量，简化处理
+    // 存储按钮位置信息
+    gameOverMenuButton = { 
         x: buttonX,
         y: menuButtonY,
         width: buttonWidth,
         height: buttonHeight
     };
     
-    ctx.restore();
-    console.log("绘制挑战完成界面 Score:", Math.floor(score / 100)); // 保留这个?
+    ctx.restore(); // 恢复按钮绘制的上下文
+
+    // 恢复调用 drawChallengeComplete 之前的绘图状态
+    ctx.restore(); 
 }
 
 // --- Game Loop ---
 let lastTime = 0;
 let gameLoopRunning = false;
-let menuButton = null; // 存储菜单按钮位置信息
-let dailyChallengeButton = null; // <<< 添加：存储每日挑战按钮位置信息
+let menuButton = null; // 存储菜单主按钮位置信息 (现在是每日挑战)
+let dailyChallengeButton = null; // <<< 这个变量不再直接使用，由 menuButton 代替
+let secondaryButton = null;    // <<< 添加：存储次要按钮位置信息 (无尽模式)
 let menuPlayerHitbox = null; // 存储菜单中玩家角色的位置信息
 let gameOverRestartButton = null; // 存储游戏结束界面重新开始按钮位置
 let gameOverMenuButton = null; // 存储游戏结束界面回到主界面按钮位置
@@ -2376,19 +2499,24 @@ function gameLoop(timestamp) {
 
     // 根据游戏状态执行不同的更新和绘制逻辑
     if (gameState === 'menu') {
+        // 清屏 (因为菜单绘制会自己处理背景)
+        ctx.clearRect(0, 0, canvasWidth, canvasHeight);
         drawMenu();
     } else if (gameState === 'playing') {
         update(deltaTime / 1000);
+        // draw() 会自己清屏和画背景
         draw();
-        // gameover 或 challengeComplete 状态的切换在 update 函数内部处理
     } else if (gameState === 'gameover') {
         // 游戏结束状态下只绘制，不更新
+        // draw() 会自己清屏和画背景
         draw(); // 继续绘制游戏场景背景
-        drawGameOver();
+        drawGameOver(); // 在游戏场景之上绘制结束界面
     } else if (gameState === 'challengeComplete') {
         // 挑战完成状态下只绘制，不更新
-        // 可以选择只绘制完成界面，或者像 gameover 一样绘制背景+完成界面
-        draw(); // 继续绘制游戏场景背景
+        updateConfetti(deltaTime / 1000); // <<< 更新礼花状态
+        // 先调用 draw() 绘制游戏最后一帧
+        draw(); 
+        // 再调用 drawChallengeComplete() 在其上叠加 UI
         drawChallengeComplete(); 
     }
 
@@ -2413,14 +2541,14 @@ canvas.addEventListener('click', (e) => {
 
     if (gameState === 'menu') {
         if (menuButton && isInsideButton(clickX, clickY, menuButton)) {
-            // 点击了 无尽模式 按钮
-            console.log("Clicked Endless Mode Button");
-            currentGameMode = GAME_MODE.ENDLESS;
-            init();
-        } else if (dailyChallengeButton && isInsideButton(clickX, clickY, dailyChallengeButton)) {
-            // 点击了 每日挑战 按钮
+            // 点击了 每日挑战 按钮 (主按钮)
             console.log("Clicked Daily Challenge Button");
             currentGameMode = GAME_MODE.DAILY_CHALLENGE;
+            init();
+        } else if (secondaryButton && isInsideButton(clickX, clickY, secondaryButton)) {
+            // 点击了 无尽模式 按钮 (次要按钮)
+            console.log("Clicked Endless Mode Button");
+            currentGameMode = GAME_MODE.ENDLESS;
             init();
         } else if (menuPlayerHitbox && isInsideButton(clickX, clickY, menuPlayerHitbox)) {
             // 点击了玩家角色
@@ -2456,14 +2584,14 @@ canvas.addEventListener('touchend', (e) => {
 
         // 检查点击的是哪个按钮
         if (menuButton && isInsideButton(touchX, touchY, menuButton)) {
-            // 点击了 无尽模式 按钮
-            console.log("Touched Endless Mode Button (Mobile)");
-            currentGameMode = GAME_MODE.ENDLESS;
+            // 点击了 每日挑战 按钮 (主按钮)
+            console.log("Touched Daily Challenge Button (Mobile)");
+            currentGameMode = GAME_MODE.DAILY_CHALLENGE;
             init();
-        } else if (dailyChallengeButton && isInsideButton(touchX, touchY, dailyChallengeButton)) {
-             // 点击了 每日挑战 按钮
-             console.log("Touched Daily Challenge Button (Mobile)");
-             currentGameMode = GAME_MODE.DAILY_CHALLENGE;
+        } else if (secondaryButton && isInsideButton(touchX, touchY, secondaryButton)) {
+             // 点击了 无尽模式 按钮 (次要按钮)
+             console.log("Touched Endless Mode Button (Mobile)");
+             currentGameMode = GAME_MODE.ENDLESS;
              init();
         } else if (menuPlayerHitbox && isInsideButton(touchX, touchY, menuPlayerHitbox)) {
             // 触摸了玩家角色
@@ -2685,4 +2813,42 @@ function createPhantomPlatform(targetY) {
             opacity: 1.0
         });
     }
+}
+
+// --- 创建礼花粒子 ---
+function createConfetti() {
+    confettiParticles = []; // 清空旧粒子
+    const numberOfParticles = 150; // 粒子数量
+    for (let i = 0; i < numberOfParticles; i++) {
+        confettiParticles.push({
+            x: Math.random() * canvasWidth, // 随机X起始位置
+            y: -Math.random() * canvasHeight * 0.5, // 从屏幕顶部偏上开始
+            width: 5 + Math.random() * 10,
+            height: 10 + Math.random() * 15,
+            color: confettiColors[Math.floor(Math.random() * confettiColors.length)],
+            vx: (Math.random() - 0.5) * 4, // 水平速度（左右飘动）
+            vy: 1 + Math.random() * 3,     // 垂直下落速度
+            rotation: Math.random() * 360, // 初始旋转角度
+            rotationSpeed: (Math.random() - 0.5) * 10 // 旋转速度
+        });
+    }
+}
+
+// --- 更新礼花粒子 ---
+function updateConfetti(dt) {
+    confettiParticles.forEach((p, index) => {
+        p.y += p.vy;
+        p.x += p.vx;
+        p.rotation += p.rotationSpeed;
+        
+        // 简单模拟空气阻力或飘动
+        p.vy += 0.05; // 轻微加速下落
+        p.vx *= 0.99; // 水平速度减慢
+
+        // 如果粒子掉出屏幕下方，则移除 (或者循环利用)
+        if (p.y > canvasHeight + p.height) {
+            // 暂时直接移除
+            confettiParticles.splice(index, 1);
+        }
+    });
 }
