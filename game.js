@@ -109,11 +109,11 @@ const difficultyConfig = {
     movingBaseProbability: 0.1,       // 移动平台基础概率
     movingMaxIncrement: 0.15,          // 移动平台最大概率增量
     
-    breakableBaseProbability: 0.05,   // 易碎平台基础概率
+    breakableBaseProbability: 0.1,   // 易碎平台基础概率
     breakableMaxIncrement: 0.3,      // 易碎平台最大概率增量
     
     movingBreakableBaseProbability: 0.05, // 移动易碎平台基础概率
-    movingBreakableMaxIncrement: 0.5,     // 移动易碎平台最大概率增量
+    movingBreakableMaxIncrement: 0.3,     // 移动易碎平台最大概率增量
     
     // 上下移动平台参数
     verticalMovingBaseProbability: 0.08,  // 上下移动平台基础概率
@@ -138,7 +138,7 @@ const difficultyConfig = {
     
     // 移动平台速度
     movingPlatformBaseSpeed: 1,       // 移动平台基础速度
-    movingPlatformSpeedIncrement: 3 // 移动平台速度难度增量
+    movingPlatformSpeedIncrement: 2.5 // 移动平台速度难度增量
 };
 
 // 检测设备类型
