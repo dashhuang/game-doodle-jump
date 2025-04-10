@@ -1,6 +1,35 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
+// ===== 新增游戏结束界面状态变量 =====
+let gameOverPlayerName = ''; // 存储玩家输入的名字
+let lastSubmittedName = ''; // 存储上次提交的名字
+let submissionStatusMessage = ''; // 存储提交状态信息
+let isSubmitting = false; // 是否正在提交分数
+let gameOverButtons = {}; // 存储游戏结束界面按钮的位置信息 { submit: rect, restart: rect, menu: rect }
+let isNameInputActive = false; // 新增：跟踪名字输入框是否被激活
+const MAX_NAME_LENGTH = 15;
+let isNewRecord = false; // 新增：是否创造新纪录
+let canSubmitScore = false; // 新增：是否可以提交分数
+let localHighScores = { // 新增：本地最高分数据
+    endless: 0,
+    challenge: 0
+};
+
+// ===== 新增：排行榜数据存储 =====
+let leaderboardData = {
+    challenge: { 
+        status: 'idle', 
+        rankings: [], // 存储前20名排行榜数据
+        error: null 
+    },
+    endless: { 
+        status: 'idle', 
+        rankings: [], // 存储前20名排行榜数据
+        error: null 
+    }
+};
+
 // ===== 游戏模式 =====
 const GAME_MODE = {
     ENDLESS: 'ENDLESS',
@@ -61,7 +90,8 @@ function useDefaultRandom() {
 // ===== 难度配置（统一管理所有难度相关参数） =====
 const difficultyConfig = {
     // 基础难度计算
-    maxScore: 5000,                   // 恢复正常通关分数
+    maxScore: 6000,                   // 难度系数达到1.0的分数线
+    challengeFinishScore: 10000,       // 新增：挑战模式触发终点平台的分数线
     
     // 平台类型阈值
     movingThreshold: 0.2,             // 移动平台出现的难度阈值
@@ -288,7 +318,7 @@ function resizeHandler() {
 // --- Initialization and Platform Creation (Use Logical Dimensions) ---
 function init() {
     console.log("初始化游戏...");
-
+    hideScoreSubmissionOverlay(); // 重置名字和提交状态
     // ===== Game Mode Specific Setup =====
     if (currentGameMode === GAME_MODE.DAILY_CHALLENGE) {
         const dateString = getCurrentDateString();
@@ -387,11 +417,14 @@ function init() {
     } else {
         console.log("游戏循环已经在运行中");
     }
+
+    // 移除：根据当前模式获取排行榜
 }
 
 // 初始化菜单场景（只创建玩家脚下的第一个平台，其他平台在游戏开始后生成）
 function initMenu() {
     console.log("初始化菜单...");
+    hideScoreSubmissionOverlay(); // 重置名字和提交状态
     // 重置游戏状态
     score = 0;
     gameover = false;
@@ -473,9 +506,8 @@ function initMenu() {
     } else {
         console.log("游戏循环已经在运行中（菜单）");
     }
-    
     // 立即绘制一次菜单，确保按钮可见
-    drawMenu();
+    // drawMenu(); // drawMenu will be called by gameLoop
 }
 
 // createPlatform remains the same, works in logical coordinates
@@ -716,11 +748,15 @@ document.addEventListener('keydown', (e) => {
     // 在游戏结束状态下只有按左右方向键或空格键才重新开始
     if (gameState === 'gameover') {
         // 判断是否按下了指定的按键
+        /* // <-- 注释掉原来的 if 条件
         if (e.code === 'ArrowLeft' || e.code === 'ArrowRight' ||
             e.code === 'KeyA' || e.code === 'KeyD' || e.code === 'Space') {
             init(); // 默认重新开始当前模式
         }
-        return;
+        */ // <-- 结束注释
+        // 注意：之前的键盘名字输入逻辑在另一个 keydown 监听器里，这里只处理旧的重启逻辑
+        // 保留 return，防止 gameover 状态下按键影响其他逻辑（如果未来添加的话）
+        return; 
     }
 
     // 游戏中的键盘控制
@@ -937,6 +973,16 @@ function update(dt) {
     // Update player position using logical coordinates
     player.x += player.vx;
 
+    // -- 移除屏幕环绕逻辑 --
+    /* 
+    if (player.x + player.width < 0) { 
+        player.x = logicalWidth; 
+    } else if (player.x > logicalWidth) { 
+        player.x = -player.width; 
+    }
+    */
+    // -- 屏幕环绕逻辑已移除 --
+
     player.vy += player.gravity;
     player.y += player.vy;
 
@@ -1078,6 +1124,28 @@ function update(dt) {
                         createConfetti(); // <<< 在这里触发礼花生成
                         player.vy = 0; 
                         player.onGround = true;
+                        
+                        // --- 新增：添加分数检查和提交资格判断逻辑 --- 
+                        const finalScore = Math.floor(score / 100);
+                        const gameModeId = 'challenge'; // 明确是挑战模式
+                        isNewRecord = finalScore > localHighScores[gameModeId];
+                        
+                        // 如果是新纪录，保存到本地
+                        if (isNewRecord) {
+                            localHighScores[gameModeId] = finalScore;
+                            try {
+                                localStorage.setItem('jumpGameHighScores', JSON.stringify(localHighScores));
+                                console.log(`[Challenge Complete] 保存新纪录: ${gameModeId} 模式 - ${finalScore}分`);
+                            } catch (e) {
+                                console.error("[Challenge Complete] 保存最高分到localStorage时出错:", e);
+                            }
+                        }
+                        
+                        // 检查分数是否可能进入前20名 - 使用缓存数据
+                        checkLeaderboardEligibilityFromCache(finalScore, gameModeId);
+                        // --- 逻辑添加结束 ---
+                        
+                        showScoreSubmissionOverlay(); // 重置名字和提交状态
                         return; // 通关后不再检测其他碰撞
                     }
                     
@@ -1242,7 +1310,7 @@ function update(dt) {
     }
 
     // --- 生成终点平台 (仅限每日挑战) ---
-    if (currentGameMode === GAME_MODE.DAILY_CHALLENGE && !isFinishPlatformGenerated && score >= difficultyConfig.maxScore) {
+    if (currentGameMode === GAME_MODE.DAILY_CHALLENGE && !isFinishPlatformGenerated && score >= difficultyConfig.challengeFinishScore) {
         // 找到当前最高平台的 Y 坐标
         let highestY = platforms.length > 0 ? Math.min(...platforms.map(p => p.y)) : logicalHeight;
         // 在最高平台上方一个合适的距离生成终点平台
@@ -1257,9 +1325,34 @@ function update(dt) {
     // Game Over Condition (Based on Logical Height)
     // 只有在未通关的情况下才判断游戏结束
     if (gameState !== 'challengeComplete' && player.y > logicalHeight) { // Game over as soon as player's top edge is below bottom
-        gameover = true; // 保留 gameover 标志以便兼容旧逻辑？或许可以移除
-        gameState = 'gameover';
-        // console.log("Game Over! Score:", Math.floor(score / 100)); // 移除?
+        console.log(`[Update] Checking Game Over: gameState=${gameState}, player.y=${player.y.toFixed(1)}, logicalHeight=${logicalHeight}`);
+        if (gameState === 'playing') { // 确保只在 playing 状态下触发一次
+            console.log("[Update] Game Over condition met! Setting gameState to 'gameover'.");
+            gameover = true; // 保留 gameover 标志
+            gameState = 'gameover';
+            
+            // 检查是否创造新纪录
+            const finalScore = Math.floor(score / 100);
+            const gameModeId = currentGameMode === GAME_MODE.DAILY_CHALLENGE ? 'challenge' : 'endless';
+            isNewRecord = finalScore > localHighScores[gameModeId];
+            
+            // 如果是新纪录，保存到本地
+            if (isNewRecord) {
+                localHighScores[gameModeId] = finalScore;
+                try {
+                    localStorage.setItem('jumpGameHighScores', JSON.stringify(localHighScores));
+                    console.log(`[Game Over] 保存新纪录: ${gameModeId} 模式 - ${finalScore}分`);
+                } catch (e) {
+                    console.error("[Game Over] 保存最高分到localStorage时出错:", e);
+                }
+            }
+            
+            // 检查分数是否可能进入前20名 - 使用缓存数据
+            checkLeaderboardEligibilityFromCache(finalScore, gameModeId);
+            
+            showScoreSubmissionOverlay(); // 重置名字和提交状态
+            // No need to stop gameLoopRunning here, gameLoop handles state
+        }
     }
 
     // Difficulty Update - 修改难度计算和输出逻辑
@@ -1290,6 +1383,36 @@ function update(dt) {
         player.scaleY = 1;
     }
     // --- End Squash & Stretch Update ---
+
+    // --- 挑战模式：检查是否生成终点平台 --- // <<< 保留这个正确的逻辑块
+    if (currentGameMode === GAME_MODE.DAILY_CHALLENGE && !isFinishPlatformGenerated) {
+        // 使用 challengeFinishScore 判断，而不是 difficulty >= 1
+        if (score >= difficultyConfig.challengeFinishScore) {
+            console.log(`[Update] Score (${score}) reached challenge finish score (${difficultyConfig.challengeFinishScore}). Generating finish platform.`);
+            // 在当前玩家视野的上方安全位置生成终点平台
+            const finishY = player.y - logicalHeight * 0.8; // 在玩家上方较远位置
+            const finishX = logicalWidth / 2 - platformWidth / 2; // 居中
+            createPlatform(finishX, finishY, null, true); // 第四个参数 isFinish = true
+            isFinishPlatformGenerated = true;
+            console.log(`[Update] Finish platform generated at Y: ${finishY.toFixed(1)}`);
+        }
+    }
+
+    // --- 移除旧的、冗余的终点平台生成逻辑 --- 
+    /*
+    // --- 生成终点平台 (仅限每日挑战) ---
+    if (currentGameMode === GAME_MODE.DAILY_CHALLENGE && !isFinishPlatformGenerated && score >= difficultyConfig.maxScore) {
+        // 找到当前最高平台的 Y 坐标
+        let highestY = platforms.length > 0 ? Math.min(...platforms.map(p => p.y)) : logicalHeight;
+        // 在最高平台上方一个合适的距离生成终点平台
+        const finishPlatformY = highestY - (difficultyConfig.basePlatformMinYSpacing + difficultyConfig.basePlatformMaxYSpacing) / 2 - 20;
+        // 将终点平台放在屏幕中央
+        const finishPlatformX = logicalWidth / 2 - platformWidth / 2;
+        createPlatform(finishPlatformX, finishPlatformY, null, true); // isFinish = true
+        isFinishPlatformGenerated = true;
+        // console.log("Finish platform generation triggered."); // 移除
+    }
+    */
 }
 
 // --- Drawing (Apply Scaling, Bottom Anchoring, and Adjusted Clipping) ---
@@ -2224,123 +2347,290 @@ function drawMenu() {
 }
 
 function drawGameOver() {
-    // 绘制半透明覆盖层，与开始界面保持一致
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)'; // 改为与菜单界面相同的透明度
-    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    // 绘制半透明覆盖层
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)'; 
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight); // 使用物理画布宽高
     
-    // 游戏结束文字
+    // 保存状态
     ctx.save();
     ctx.fillStyle = 'white';
-    ctx.font = 'bold 48px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
     ctx.textAlign = 'center';
-    
-    // 减少模糊度并使用更轻微的阴影效果
+    ctx.textBaseline = 'middle';
+
+    // 获取当前游戏模式ID
+    const gameMode = currentGameMode === GAME_MODE.DAILY_CHALLENGE ? 'challenge' : 'endless';
+    const currentLeaderboardData = leaderboardData[gameMode];
+
+    // 游戏结束文字
+    ctx.font = 'bold 48px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
     ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
     ctx.shadowBlur = 4;
     ctx.shadowOffsetX = 1;
     ctx.shadowOffsetY = 1;
-    
-    // 应用抗锯齿
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    
-    // 使用整数坐标位置以避免模糊
-    const textX = Math.round(canvasWidth / 2);
-    const textY = Math.round(canvasHeight / 2 - 80); // 向上移动一些以腾出空间
-    ctx.fillText('游戏结束!', textX, textY);
+    ctx.fillText('游戏结束!', Math.round(canvasWidth / 2), Math.round(canvasHeight / 2 - 160));
     
     // 显示得分
     ctx.font = 'bold 36px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
     const displayScore = Math.floor(score / 100);
-    ctx.fillText(`得分: ${displayScore}`, Math.round(canvasWidth / 2), Math.round(canvasHeight / 2 - 20));
+    ctx.fillText(`得分: ${displayScore}`, Math.round(canvasWidth / 2), Math.round(canvasHeight / 2 - 110));
     
-    // 重新开始按钮
-    const buttonWidth = 200;
-    const buttonHeight = 50;
-    const buttonX = Math.round(canvasWidth / 2 - buttonWidth / 2);
-    const buttonY = Math.round(canvasHeight / 2 + 30);
-    const buttonCornerRadius = 10;
-    const innerShadowHeight = 4;
+    // 显示历史最高分
+    const highScore = localHighScores[gameMode];
+    ctx.font = '24px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillText(`历史最高分: ${highScore}`, Math.round(canvasWidth / 2), Math.round(canvasHeight / 2 - 70));
     
-    // 按钮样式 (重新开始 - 橙黄色)
-    const restartButtonColor = '#FF9800'; 
-    const restartButtonShadowColor = '#E68A00'; 
+    // 如果创造新纪录，显示祝贺文字
+    if (isNewRecord) {
+        ctx.font = 'bold 28px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
+        ctx.fillStyle = '#FFD700'; // 金色
+        ctx.fillText('新纪录！', Math.round(canvasWidth / 2), Math.round(canvasHeight / 2 - 30));
+        ctx.fillStyle = 'white'; // 恢复白色
+    }
 
-    // 绘制按钮主体
-    ctx.beginPath();
-    ctx.roundRect(buttonX, buttonY, buttonWidth, buttonHeight, buttonCornerRadius);
+    // 根据条件决定是否显示输入框和提交按钮
+    if (isNewRecord && canSubmitScore) {
+        // --- 绘制名字输入部分 ---
+        ctx.font = 'bold 20px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
+        ctx.fillText('输入你的名字:', Math.round(canvasWidth / 2), Math.round(canvasHeight / 2 + 10));
+        
+        const inputWidth = 200;
+        const inputHeight = 30;
+        const inputX = Math.round(canvasWidth / 2 - inputWidth / 2);
+        const inputY = Math.round(canvasHeight / 2 + 30);
+        const inputCornerRadius = 5;
+        
+        // 绘制输入框背景（根据激活状态有不同样式）
+        if (isNameInputActive) {
+            // 激活状态：亮白色背景，蓝色边框
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+            ctx.strokeStyle = 'rgba(0, 120, 215, 0.8)';
+            ctx.lineWidth = 2;
+        } else {
+            // 非激活状态：较淡的背景，灰色边框
+            ctx.fillStyle = 'rgba(240, 240, 240, 0.8)';
+            ctx.strokeStyle = 'rgba(150, 150, 150, 0.5)';
+            ctx.lineWidth = 1;
+        }
+        
+        // 绘制输入框
+        ctx.beginPath();
+        ctx.roundRect(inputX, inputY, inputWidth, inputHeight, inputCornerRadius);
+        ctx.fill();
+        ctx.stroke();
+        
+        // 绘制输入的名字
+        ctx.fillStyle = 'black';
+        ctx.font = '20px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
+        ctx.textAlign = 'left';
+        
+        // 添加光标效果 (闪烁的竖线)，仅在未提交成功且输入框激活时显示
+        let displayName = gameOverPlayerName;
+        const hasSubmittedSuccessfullyVisual = submissionStatusMessage === '分数提交成功!'; // 用于视觉判断
+        if (!hasSubmittedSuccessfullyVisual && isNameInputActive && Math.floor(Date.now() / 500) % 2 === 0) { 
+            displayName += '|';
+        }
+        ctx.fillText(displayName, inputX + 10, Math.round(inputY + inputHeight / 2));
+        
+        // 添加点击提示（仅在非激活状态且未提交时显示）
+        if (!isNameInputActive && !hasSubmittedSuccessfullyVisual && !gameOverPlayerName) {
+            ctx.fillStyle = 'rgba(100, 100, 100, 0.8)';
+            ctx.font = 'italic 16px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
+            ctx.fillText('点击此处输入...', inputX + 10, Math.round(inputY + inputHeight / 2));
+        }
+        
+        // --- 绘制按钮 --- 
+        ctx.textAlign = 'center';
+        const buttonWidth = 120;
+        const buttonHeight = 40;
+        const buttonY = inputY + inputHeight + 30;
+        const buttonSpacing = 10;
+        const totalButtonWidth = (buttonWidth * 3) + (buttonSpacing * 2);
+        const startButtonX = Math.round(canvasWidth / 2 - totalButtonWidth / 2);
+        const buttonCornerRadius = 8;
+        const innerShadowHeight = 3;
 
-    // 绘制内阴影
-    ctx.save();
-    ctx.clip();
-    ctx.fillStyle = restartButtonShadowColor;
-    ctx.fillRect(buttonX, buttonY + buttonHeight - innerShadowHeight, buttonWidth, innerShadowHeight);
-    ctx.restore();
+        // 按钮通用绘制函数 (复用样式)
+        function drawButton(text, x, y, color, shadowColor, enabled = true) { // 添加 enabled 参数
+            const currentAlpha = ctx.globalAlpha; // 保存当前透明度
+            if (!enabled) {
+                ctx.globalAlpha = 0.6; // 禁用时降低透明度
+            }
+            ctx.beginPath();
+            ctx.roundRect(x, y, buttonWidth, buttonHeight, buttonCornerRadius);
+            // 内阴影
+            ctx.save();
+            ctx.clip();
+            ctx.fillStyle = shadowColor;
+            ctx.fillRect(x, y + buttonHeight - innerShadowHeight, buttonWidth, innerShadowHeight);
+            ctx.restore();
+            // 主色
+            ctx.fillStyle = color;
+            ctx.fill();
+            // 文字
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 18px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.2)';
+            ctx.shadowBlur = 2;
+            ctx.shadowOffsetX = 1;
+            ctx.shadowOffsetY = 1;
+            ctx.fillText(text, Math.round(x + buttonWidth / 2), Math.round(y + buttonHeight / 2));
+            ctx.shadowColor = 'transparent'; // 清除文字阴影
+            
+            ctx.globalAlpha = currentAlpha; // 恢复透明度
+            
+            return { x, y, width: buttonWidth, height: buttonHeight }; // 返回按钮区域
+        }
 
-    // 填充主色
-    ctx.fillStyle = restartButtonColor;
-    ctx.fill();
+        // 计算按钮位置
+        const submitButtonX = startButtonX;
+        const restartButtonX = submitButtonX + buttonWidth + buttonSpacing;
+        const menuButtonX = restartButtonX + buttonWidth + buttonSpacing;
+
+        // 绘制按钮并存储位置
+        const submitShouldBeEnabled = !isSubmitting; // 逻辑上的可点击状态
+
+        gameOverButtons.submit = drawButton(
+            hasSubmittedSuccessfullyVisual ? '已提交' : (isSubmitting ? '提交中...' : '提交分数'), 
+            submitButtonX, 
+            buttonY, 
+            hasSubmittedSuccessfullyVisual ? '#AAAAAA' : (isSubmitting ? '#AAAAAA' : '#4CAF50'), // 成功或提交中用灰色
+            hasSubmittedSuccessfullyVisual ? '#888888' : (isSubmitting ? '#888888' : '#388E3C'),
+            submitShouldBeEnabled // 根据是否提交中来决定按钮是否可点击 (视觉上)
+        );
+        gameOverButtons.restart = drawButton('重新开始', restartButtonX, buttonY, '#FF9800', '#E68A00');
+        gameOverButtons.menu = drawButton('回到主菜单', menuButtonX, buttonY, '#48C9B0', '#369F8C');
+
+        // --- 绘制提交状态信息 ---
+        ctx.font = '16px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
+        ctx.fillStyle = hasSubmittedSuccessfullyVisual ? '#90EE90' : 'white'; // 成功时用浅绿色
+        ctx.textAlign = 'center';
+        const statusY = buttonY + buttonHeight + 25;
+        ctx.fillText(submissionStatusMessage, Math.round(canvasWidth / 2), statusY);
+    } else {
+        // 如果不能提交成绩，只显示重新开始和回到主菜单按钮
+        const buttonWidth = 150;
+        const buttonHeight = 40;
+        const buttonY = Math.round(canvasHeight / 2 + 30);
+        const buttonSpacing = 20;
+        const totalButtonWidth = (buttonWidth * 2) + buttonSpacing;
+        const startButtonX = Math.round(canvasWidth / 2 - totalButtonWidth / 2);
+        const buttonCornerRadius = 8;
+        const innerShadowHeight = 3;
+        
+        function drawButton(text, x, y, color, shadowColor) {
+            ctx.beginPath();
+            ctx.roundRect(x, y, buttonWidth, buttonHeight, buttonCornerRadius);
+            // 内阴影
+            ctx.save();
+            ctx.clip();
+            ctx.fillStyle = shadowColor;
+            ctx.fillRect(x, y + buttonHeight - innerShadowHeight, buttonWidth, innerShadowHeight);
+            ctx.restore();
+            // 主色
+            ctx.fillStyle = color;
+            ctx.fill();
+            // 文字
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 18px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.2)';
+            ctx.shadowBlur = 2;
+            ctx.shadowOffsetX = 1;
+            ctx.shadowOffsetY = 1;
+            ctx.fillText(text, Math.round(x + buttonWidth / 2), Math.round(y + buttonHeight / 2));
+            ctx.shadowColor = 'transparent'; // 清除文字阴影
+            
+            return { x, y, width: buttonWidth, height: buttonHeight };
+        }
+        
+        const restartButtonX = startButtonX;
+        const menuButtonX = restartButtonX + buttonWidth + buttonSpacing;
+        
+        // 隐藏提交按钮
+        gameOverButtons.submit = null;
+        
+        // 绘制重新开始和回到主菜单按钮
+        gameOverButtons.restart = drawButton('重新开始', restartButtonX, buttonY, '#FF9800', '#E68A00');
+        gameOverButtons.menu = drawButton('回到主菜单', menuButtonX, buttonY, '#48C9B0', '#369F8C');
+        
+        // -- 移除无法提交分数的文字提示 --
+        /*
+        // 如果不是新纪录也不符合排行榜条件，显示原因
+        if (!isNewRecord) {
+            ctx.font = '18px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
+            ctx.fillStyle = '#CCCCCC';
+            ctx.textAlign = 'center';
+            ctx.fillText('未创造新纪录，无法提交成绩', Math.round(canvasWidth / 2), buttonY + buttonHeight + 30);
+        } else if (!canSubmitScore) {
+            ctx.font = '18px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
+            ctx.fillStyle = '#CCCCCC';
+            ctx.textAlign = 'center';
+            ctx.fillText('分数未达到排行榜标准，无法提交', Math.round(canvasWidth / 2), buttonY + buttonHeight + 30);
+        }
+        */
+    }
+
+    // --- 绘制当前模式的排行榜 ---
+    const leaderboardTitle = currentGameMode === GAME_MODE.DAILY_CHALLENGE ? '今日挑战排行' : '无尽模式排行';
     
-    // 移除边框
-    // ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-    // ctx.lineWidth = 2;
-    // ctx.stroke();
+    // 根据是否有提交UI调整排行榜位置
+    const leaderboardY = (isNewRecord && canSubmitScore) ? 
+        Math.round(canvasHeight / 2 + 180) : 
+        Math.round(canvasHeight / 2 + 100);
     
-    // 按钮文字
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = 'white'; 
-    ctx.font = 'bold 24px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
-    ctx.textAlign = 'center'; 
-    // 添加文字阴影
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.2)';
-    ctx.shadowBlur = 2;
-    ctx.shadowOffsetX = 1;
-    ctx.shadowOffsetY = 1;
-    ctx.fillText('重新开始', Math.round(canvasWidth / 2), Math.round(buttonY + buttonHeight / 2));
-    ctx.shadowColor = 'transparent'; // 清除文字阴影
-
-    // 存储按钮位置信息
-    gameOverRestartButton = { x: buttonX, y: buttonY, width: buttonWidth, height: buttonHeight };
-    
-    // 回到主界面按钮
-    const menuButtonY = buttonY + buttonHeight + 20; // 在第一个按钮下方
-    const menuButtonColor = '#48C9B0'; // 改为较深的蓝绿色
-    const menuButtonShadowColor = '#369F8C'; // 更深的阴影色
-
-    // 绘制按钮主体
-    ctx.beginPath();
-    ctx.roundRect(buttonX, menuButtonY, buttonWidth, buttonHeight, buttonCornerRadius);
-
-    // 内阴影
-    ctx.save();
-    ctx.clip();
-    ctx.fillStyle = menuButtonShadowColor;
-    ctx.fillRect(buttonX, menuButtonY + buttonHeight - innerShadowHeight, buttonWidth, innerShadowHeight);
-    ctx.restore();
-
-    // 填充主色
-    ctx.fillStyle = menuButtonColor;
-    ctx.fill();
-    
-    // 移除边框
-    // ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-    // ctx.stroke();
-    
-    // 按钮文字
+    ctx.font = 'bold 18px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
     ctx.fillStyle = 'white';
-    ctx.textAlign = 'center'; 
-    // 添加文字阴影
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.2)';
-    ctx.shadowBlur = 2;
-    ctx.shadowOffsetX = 1;
-    ctx.shadowOffsetY = 1;
-    ctx.fillText('回到主界面', Math.round(canvasWidth / 2), Math.round(menuButtonY + buttonHeight / 2));
-    ctx.shadowColor = 'transparent';
+    ctx.textAlign = 'center';
+    ctx.fillText(leaderboardTitle, Math.round(canvasWidth / 2), leaderboardY);
 
-    // 存储回到主界面按钮位置
-    gameOverMenuButton = { x: buttonX, y: menuButtonY, width: buttonWidth, height: buttonHeight };
+    const rankingStartY = leaderboardY + 25;
+    const lineHeight = 22;
+    ctx.font = '16px "Arial", "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'left';
     
-    ctx.restore(); // 恢复游戏结束文字绘制前的状态
+    // 计算排行榜水平位置
+    const totalButtonWidth = (isNewRecord && canSubmitScore) ? 
+        (120 * 3) + (10 * 2) : // 三个按钮加间距
+        (150 * 2) + 20; // 两个按钮加间距
+    
+    const rankX = Math.round(canvasWidth / 2 - totalButtonWidth / 2); // 左对齐
+    const nameX = rankX + 40;
+    const scoreX = (isNewRecord && canSubmitScore) ? 
+        rankX + totalButtonWidth - 120 : // 三按钮样式
+        rankX + totalButtonWidth - 60; // 两按钮样式
+
+    if (currentLeaderboardData.status === 'loading') {
+        ctx.fillStyle = '#DDDDDD';
+        ctx.fillText('排行榜加载中...', rankX, rankingStartY);
+    } else if (currentLeaderboardData.status === 'error') {
+        ctx.fillStyle = '#FF6666'; // 红色表示错误
+        ctx.fillText(`加载失败: ${currentLeaderboardData.error}`, rankX, rankingStartY);
+    } else if (currentLeaderboardData.status === 'loaded') {
+        if (currentLeaderboardData.rankings.length === 0) {
+            ctx.fillStyle = '#DDDDDD';
+            ctx.fillText(`暂无${gameMode === 'challenge' ? '今日' : ''}排行`, rankX, rankingStartY);
+        } else {
+            // 只显示前5名数据
+            const displayRankings = currentLeaderboardData.rankings.slice(0, 5);
+            displayRankings.forEach((entry, index) => {
+                const yPos = rankingStartY + index * lineHeight;
+                ctx.fillStyle = 'white';
+                // Rank
+                ctx.textAlign = 'left';
+                ctx.fillText(`#${entry.rank}`, rankX, yPos);
+                // Name
+                ctx.fillText(entry.name, nameX, yPos);
+                // Score
+                ctx.textAlign = 'right';
+                ctx.fillText(entry.score, scoreX + 60, yPos);
+            });
+        }
+    } else { // idle status
+         ctx.fillStyle = '#DDDDDD';
+         ctx.fillText('正在准备加载排行榜...', rankX, rankingStartY);
+    }
+
+    // 恢复状态
+    ctx.restore(); 
 }
 
 // --- 绘制每日挑战完成界面 ---
@@ -2492,35 +2782,153 @@ function triggerPlayerAnimation() {
 }
 
 function gameLoop(timestamp) {
-    if (!gameLoopRunning) return;
-
     const deltaTime = timestamp - lastTime;
     lastTime = timestamp;
+    let continueLoop = true; // 控制是否继续下一帧
+    // console.log(`[GameLoop] Current gameState: ${gameState}`); // 可选：取消注释以查看每帧的状态
 
-    // 根据游戏状态执行不同的更新和绘制逻辑
+    if (!gameLoopRunning && gameState !== 'menu') { // Allow menu to start loop, otherwise respect flag
+        console.log("[GameLoop] gameLoopRunning is false, exiting.")
+        return; 
+    }
+
     if (gameState === 'menu') {
-        // 清屏 (因为菜单绘制会自己处理背景)
         ctx.clearRect(0, 0, canvasWidth, canvasHeight);
         drawMenu();
     } else if (gameState === 'playing') {
         update(deltaTime / 1000);
-        // draw() 会自己清屏和画背景
         draw();
-    } else if (gameState === 'gameover') {
-        // 游戏结束状态下只绘制，不更新
-        // draw() 会自己清屏和画背景
-        draw(); // 继续绘制游戏场景背景
-        drawGameOver(); // 在游戏场景之上绘制结束界面
-    } else if (gameState === 'challengeComplete') {
-        // 挑战完成状态下只绘制，不更新
-        updateConfetti(deltaTime / 1000); // <<< 更新礼花状态
-        // 先调用 draw() 绘制游戏最后一帧
-        draw(); 
-        // 再调用 drawChallengeComplete() 在其上叠加 UI
-        drawChallengeComplete(); 
-    }
+    } else if (gameState === 'gameover' || gameState === 'challengeComplete') {
+        // 结束状态：不更新游戏逻辑 (除了礼花)，但持续绘制
+        if (gameState === 'challengeComplete') {
+             updateConfetti(deltaTime / 1000); 
+        }
+        // 清屏和绘制背景/角色等
+        // draw(); // draw() might contain logic we don't want in game over, let's call specifics
+        // --- Redraw required background elements --- 
+        ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+        ctx.fillStyle = '#87CEEB';
+        ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+        ctx.save();
+        ctx.translate(offsetX, offsetY);
+        ctx.scale(scale, scale);
+        // Draw clouds, platforms etc. as needed for background
+        // You might need a specific drawBackground() function or duplicate parts of draw()
+        // Simplified: Just draw clouds from draw() logic
+        const visibleLogicalTopY = logicalHeight - (canvasHeight / scale);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.8)'; // Back clouds
+        clouds.forEach(cloud => {
+            if (cloud.layer === 'back' && cloud.y + cloud.size > visibleLogicalTopY && cloud.y - cloud.size < logicalHeight) {
+                drawCloudShape(ctx, cloud.x, cloud.y, cloud.size, cloud.type);
+            }
+        });
+        
+        // 使用与游戏中相同的平台绘制代码，而不是简化版的矩形
+        platforms.forEach(platform => { 
+            if (platform.y + platform.height > visibleLogicalTopY && platform.y < logicalHeight) {
+                const platformX = platform.x;
+                const platformY = platform.y;
+                const platformW = platform.width;
+                const platformH = platform.height;
+                const grassHeight = platformH * 0.4; // 草地高度为平台总高度的40%
+                const platformCornerRadius = 5;
+                
+                // 确定基础颜色 (将根据平台类型修改饱和度/亮度)
+                let grassColor, soilColor;
+                
+                if (platform.isBroken) {
+                    grassColor = '#aaa';
+                    soilColor = '#999';
+                } else if (platform.type === 'moving') {
+                    grassColor = '#8FBC8F'; // 暗海洋绿(草地部分)
+                    soilColor = '#5F9EA0'; // 保留轻鸭绿色(土壤部分)
+                } else if (platform.type === 'verticalMoving') {
+                    grassColor = '#FFA07A'; // 亮橙色(草地部分)
+                    soilColor = '#CD853F'; // 标准土壤颜色但更深
+                } else if (platform.type === 'breakable') {
+                    // 冰块风格 - 淡蓝色+白色
+                    grassColor = '#A5F2F3'; // 浅蓝色(冰块顶部)
+                    soilColor = '#77C5D5'; // 稍深蓝色(冰块底部)
+                } else if (platform.type === 'movingBreakable') {
+                    // 移动+易碎平台 - 紫色
+                    grassColor = '#E6A8D7'; // 淡紫色(顶部)
+                    soilColor = '#9966CC'; // 中紫色(底部)
+                } else if (platform.type === 'finish') {
+                    // --- 终点平台特殊颜色 ---
+                    grassColor = '#FFD700'; // 金色
+                    soilColor = '#DAA520'; // 金麒麟色
+                } else {
+                    // 普通平台
+                    grassColor = '#90EE90'; // 淡绿色草地
+                    soilColor = '#CD853F'; // 秘鲁色土壤
+                }
+                
+                // 绘制土壤(下部分)
+                ctx.fillStyle = soilColor;
+                ctx.beginPath();
+                ctx.roundRect(platformX, platformY, platformW, platformH, platformCornerRadius);
+                ctx.fill();
+                
+                // 绘制草地(上部分)
+                ctx.fillStyle = grassColor;
+                ctx.beginPath();
+                ctx.roundRect(platformX, platformY, platformW, grassHeight, 
+                    [platformCornerRadius, platformCornerRadius, 0, 0]); // 只有上边缘是圆角
+                ctx.fill();
+                
+                // 添加基本的多边形效果
+                if (!platform.isBroken && platform.type !== 'finish') {
+                    // 草地阴影三角形
+                    ctx.fillStyle = 'rgba(0,0,0,0.1)';
+                    ctx.beginPath();
+                    ctx.moveTo(platformX + platformW * 0.2, platformY);
+                    ctx.lineTo(platformX + platformW * 0.5, platformY + grassHeight);
+                    ctx.lineTo(platformX, platformY + grassHeight);
+                    ctx.closePath();
+                    ctx.fill();
+                    
+                    // 草地高光三角形
+                    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+                    ctx.beginPath();
+                    ctx.moveTo(platformX + platformW * 0.6, platformY);
+                    ctx.lineTo(platformX + platformW, platformY);
+                    ctx.lineTo(platformX + platformW, platformY + grassHeight * 0.7);
+                    ctx.closePath();
+                    ctx.fill();
+                    
+                    // 土壤部分阴影
+                    ctx.fillStyle = 'rgba(0,0,0,0.15)';
+                    ctx.beginPath();
+                    ctx.moveTo(platformX, platformY + grassHeight);
+                    ctx.lineTo(platformX + platformW * 0.4, platformY + grassHeight);
+                    ctx.lineTo(platformX + platformW * 0.2, platformY + platformH);
+                    ctx.lineTo(platformX, platformY + platformH);
+                    ctx.closePath();
+                    ctx.fill();
+                }
+            }
+        });
+        
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)'; // Front clouds
+        clouds.forEach(cloud => {
+            if (cloud.layer === 'front' && cloud.y + cloud.size > visibleLogicalTopY && cloud.y - cloud.size < logicalHeight) {
+                drawCloudShape(ctx, cloud.x, cloud.y, cloud.size, cloud.type);
+            }
+        });
+        ctx.restore(); // Restore from scaling/translation
+        // --- End Redraw background --- 
+        
+        drawGameOver(); // 绘制结束界面 UI (now handles input display)
+        continueLoop = true; // 保持循环以持续绘制和响应输入
+    } 
 
-    requestAnimationFrame(gameLoop);
+    // 请求下一帧 
+    if (continueLoop) { 
+        requestAnimationFrame(gameLoop);
+    } else {
+         console.log("[GameLoop] Loop should stop based on logic or flag.");
+         gameLoopRunning = false; 
+    }
 }
 
 // 检查点击是否在按钮内
@@ -2533,119 +2941,179 @@ function isInsideButton(x, y, button) {
 // Add resize listener
 window.addEventListener('resize', resizeHandler);
 
-// Add click listener for restart and menu interaction
+// Add click listener for menu interaction
 canvas.addEventListener('click', (e) => {
     const rect = canvas.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const clickY = e.clientY - rect.top;
+    console.log(`[Click] Event received. Current gameState: ${gameState}`); 
+    console.log(`[Click] Coords: (${clickX.toFixed(1)}, ${clickY.toFixed(1)})`);
 
     if (gameState === 'menu') {
+        // --- 菜单状态下的按钮点击逻辑 ---
+        console.log("[Click] Checking menu buttons:", JSON.stringify({menuButton, secondaryButton, menuPlayerHitbox}));
         if (menuButton && isInsideButton(clickX, clickY, menuButton)) {
-            // 点击了 每日挑战 按钮 (主按钮)
             console.log("Clicked Daily Challenge Button");
             currentGameMode = GAME_MODE.DAILY_CHALLENGE;
             init();
         } else if (secondaryButton && isInsideButton(clickX, clickY, secondaryButton)) {
-            // 点击了 无尽模式 按钮 (次要按钮)
             console.log("Clicked Endless Mode Button");
             currentGameMode = GAME_MODE.ENDLESS;
             init();
         } else if (menuPlayerHitbox && isInsideButton(clickX, clickY, menuPlayerHitbox)) {
-            // 点击了玩家角色
+            console.log("Clicked Player Hitbox in Menu.");
             triggerPlayerAnimation();
+        } else {
+            console.log("[Click] Click in menu was outside known buttons/hitbox.");
         }
-    } else if (gameState === 'gameover') {
-        // 检查点击的是哪个按钮
-        if (gameOverRestartButton && isInsideButton(clickX, clickY, gameOverRestartButton)) {
-            // 点击了重新开始按钮
+        // --- 菜单逻辑结束 ---
+
+    } else if (gameState === 'gameover' || gameState === 'challengeComplete') {
+        // --- 游戏结束状态下的按钮点击逻辑 ---
+        console.log("[Click] Checking game over buttons:", JSON.stringify(gameOverButtons)); 
+        
+        // 只有在创造新纪录且可以提交分数时才检查输入框点击
+        if (isNewRecord && canSubmitScore) {
+            // 检查是否点击了名字输入框区域
+            const inputWidth = 200;
+            const inputHeight = 30;
+            const inputX = Math.round(canvasWidth / 2 - inputWidth / 2);
+            const inputY = Math.round(canvasHeight / 2 + 30);
+            const isInsideInputBox = 
+                clickX >= inputX && clickX <= inputX + inputWidth &&
+                clickY >= inputY && clickY <= inputY + inputHeight;
+            
+            if (isInsideInputBox) {
+                console.log("[Click] Clicked on name input box.");
+                isNameInputActive = true; // 激活输入框
+            } else if (gameOverButtons.submit && isInsideButton(clickX, clickY, gameOverButtons.submit)) {
+                if (!isSubmitting) { 
+                    console.log("Clicked Submit Score button on Canvas.");
+                    submitScore();
+                } else {
+                    console.log("Clicked Submit button, but already submitting/submitted.");
+                }
+            } else {
+                // 点击输入框外部，取消激活
+                isNameInputActive = false;
+            }
+        }
+        
+        // 无论是否可以提交分数，都检查重新开始和回到主菜单按钮点击
+        if (gameOverButtons.restart && isInsideButton(clickX, clickY, gameOverButtons.restart)) {
+            console.log("Clicked Restart button on Canvas.");
             init();
-        } else if (gameOverMenuButton && isInsideButton(clickX, clickY, gameOverMenuButton)) {
-            // 点击了回到主界面按钮
+        } 
+        else if (gameOverButtons.menu && isInsideButton(clickX, clickY, gameOverButtons.menu)) {
+            console.log("Clicked Back to Menu button on Canvas.");
             initMenu();
+        } else {
+            console.log("[Click] Click in game over was outside known buttons or input box.");
         }
-    } else if (gameState === 'challengeComplete') {
-        // 检查是否点击了回到主界面按钮 (复用了 gameOverMenuButton)
-        if (gameOverMenuButton && isInsideButton(clickX, clickY, gameOverMenuButton)) {
-            console.log("Clicked Back to Menu (Challenge Complete)");
-            initMenu();
-        }
+        // --- 游戏结束逻辑结束 ---
+        
+    } else {
+        // 其他状态下的点击（例如 playing），目前忽略
+        console.log(`[Click] Ignored in gameState: ${gameState}`);
     }
 });
 
 // Touchend listener for mobile
 canvas.addEventListener('touchend', (e) => {
     e.preventDefault();
+    const touch = e.changedTouches[0];
+    if (!touch) return;
+    const rect = canvas.getBoundingClientRect();
+    const touchX = touch.clientX - rect.left;
+    const touchY = touch.clientY - rect.top;
+    console.log(`[Touchend] Event received. Current gameState: ${gameState}`); 
+    console.log(`[Touchend] Coords: (${touchX.toFixed(1)}, ${touchY.toFixed(1)})`);
+    
+    // 移除可能存在的类似错误逻辑
 
     if (gameState === 'menu') {
-        const touch = e.changedTouches[0];
-        const rect = canvas.getBoundingClientRect();
-        const touchX = touch.clientX - rect.left;
-        const touchY = touch.clientY - rect.top;
-
-        // 检查点击的是哪个按钮
+        // --- 菜单状态下的触摸逻辑 ---
+        console.log("[Touchend] Checking menu buttons:", JSON.stringify({menuButton, secondaryButton, menuPlayerHitbox}));
         if (menuButton && isInsideButton(touchX, touchY, menuButton)) {
-            // 点击了 每日挑战 按钮 (主按钮)
             console.log("Touched Daily Challenge Button (Mobile)");
             currentGameMode = GAME_MODE.DAILY_CHALLENGE;
             init();
         } else if (secondaryButton && isInsideButton(touchX, touchY, secondaryButton)) {
-             // 点击了 无尽模式 按钮 (次要按钮)
              console.log("Touched Endless Mode Button (Mobile)");
              currentGameMode = GAME_MODE.ENDLESS;
              init();
         } else if (menuPlayerHitbox && isInsideButton(touchX, touchY, menuPlayerHitbox)) {
-            // 触摸了玩家角色
+             console.log("Touched Player Hitbox in Menu.");
             triggerPlayerAnimation();
         }
-        return;
-    }
+         // Reset touch states specific to menu if needed
+         joystickActive = false;
+         isTouching = false;
+         touchStartX = null;
+         // --- 菜单逻辑结束 ---
 
-    if (gameState === 'gameover') {
-        const touch = e.changedTouches[0];
-        const rect = canvas.getBoundingClientRect();
-        const touchX = touch.clientX - rect.left;
-        const touchY = touch.clientY - rect.top;
+    } else if (gameState === 'gameover' || gameState === 'challengeComplete') {
+        // --- 游戏结束状态下的触摸逻辑 ---
+        console.log("[Touchend] Checking game over buttons:", JSON.stringify(gameOverButtons));
 
-        // 检查触摸的是哪个按钮
-        if (gameOverRestartButton && isInsideButton(touchX, touchY, gameOverRestartButton)) {
-            // 触摸了重新开始按钮，重新开始当前模式
+        // 只有在创造新纪录且可以提交分数时才检查输入框和提交按钮
+        if (isNewRecord && canSubmitScore) {
+            // 检查是否点击了名字输入框区域
+            const inputWidth = 200;
+            const inputHeight = 30;
+            const inputX = Math.round(canvasWidth / 2 - inputWidth / 2);
+            const inputY = Math.round(canvasHeight / 2 + 30);
+            const isInsideInputBox = 
+                touchX >= inputX && touchX <= inputX + inputWidth &&
+                touchY >= inputY && touchY <= inputY + inputHeight;
+            
+            if (isInsideInputBox) {
+                console.log("[Touchend] Touched on name input box.");
+                isNameInputActive = true; // 激活输入框
+            } else if (gameOverButtons.submit && isInsideButton(touchX, touchY, gameOverButtons.submit)) {
+                if (!isSubmitting) {
+                    console.log("Touched Submit Score button on Canvas.");
+                    submitScore();
+                } else {
+                    console.log("Touched Submit button, but already submitting/submitted.");
+                }
+            } else {
+                // 点击输入框外部，取消激活
+                isNameInputActive = false;
+            }
+        }
+
+        // 无论是否可以提交分数，都检查重新开始和回到主菜单按钮点击
+        if (gameOverButtons.restart && isInsideButton(touchX, touchY, gameOverButtons.restart)) {
+            console.log("Touched Restart button on Canvas.");
             init();
-        } else if (gameOverMenuButton && isInsideButton(touchX, touchY, gameOverMenuButton)) {
-            // 触摸了回到主界面按钮
+        } 
+        else if (gameOverButtons.menu && isInsideButton(touchX, touchY, gameOverButtons.menu)) {
+            console.log("Touched Back to Menu button on Canvas.");
             initMenu();
+        } else {
+             console.log("[Touchend] Touch was outside known buttons.");
         }
+        // --- 游戏结束逻辑结束 ---
 
-        // 重置触摸状态
-        isTouching = false;
-        touchStartX = null;
-        joystickActive = false;
-        return;
-    } else if (gameState === 'challengeComplete') {
-        // 检查是否触摸了回到主界面按钮
-        const touch = e.changedTouches[0];
-        const rect = canvas.getBoundingClientRect();
-        const touchX = touch.clientX - rect.left;
-        const touchY = touch.clientY - rect.top;
-        
-        if (gameOverMenuButton && isInsideButton(touchX, touchY, gameOverMenuButton)) {
-            console.log("Touched Back to Menu (Challenge Complete)");
-            initMenu();
-        }
-        
-        // 重置触摸状态（以防万一）
-        isTouching = false;
-        touchStartX = null;
-        joystickActive = false;
-        return;
-    }
-
-    // 游戏中的触摸控制
-    if (joystickActive) {
-        joystickActive = false;
+    } else if (gameState === 'playing') { 
+         // Playing state touch end logic (joystick/tap reset)
+         if (joystickActive) {
+            joystickActive = false;
+         } else {
+            isTouching = false;
+            touchStartX = null;
+         }
     } else {
-        isTouching = false;
-        touchStartX = null;
+         // Other states
+         console.log(`[Touchend] Ignored in gameState: ${gameState}`);
     }
+
+    // Consider if joystick/isTouching reset should happen globally at the end regardless of state?
+    // If so, uncomment below:
+    // if (joystickActive) joystickActive = false;
+    // if (isTouching) { isTouching = false; touchStartX = null; }
+
 }, { passive: false });
 
 // 设置事件监听
@@ -2851,4 +3319,540 @@ function updateConfetti(dt) {
             confettiParticles.splice(index, 1);
         }
     });
+}
+
+// --- 配置排行榜客户端 --- (移入 DOMContentLoaded)
+// // !! 必须替换为你自己的真实信息 !!
+// LEADERBOARD_CONFIG.baseUrl = 'https://game-service.huang.co';
+// LEADERBOARD_CONFIG.gameId = 'jump'; // 替换为你的游戏 ID
+// LEADERBOARD_CONFIG.apiKey = 'bZAaDP83ocTleVIxxSIPR6JT44oKFaeL';    // !! 替换为你的 API Key (注意安全风险) !!
+
+// ===== DOMContentLoaded Listener =====
+window.addEventListener('DOMContentLoaded', () => {
+    console.log("DOM fully loaded and parsed");
+
+    // 尝试从localStorage读取上次提交的名字和最高分
+    try {
+        const savedName = localStorage.getItem('jumpGamePlayerName');
+        if (savedName) {
+            lastSubmittedName = savedName;
+            console.log(`已从localStorage加载上次提交的名字: ${lastSubmittedName}`);
+        }
+
+        // 加载本地最高分
+        const savedHighScores = localStorage.getItem('jumpGameHighScores');
+        if (savedHighScores) {
+            localHighScores = JSON.parse(savedHighScores);
+            console.log(`已从localStorage加载最高分数据:`, localHighScores);
+        }
+    } catch (e) {
+        console.error("读取localStorage数据时出错:", e);
+    }
+
+    // --- 配置排行榜客户端 --- 
+    console.log("Configuring leaderboard client...");
+    // 检查 leaderboard-client.js 是否已定义 LEADERBOARD_CONFIG
+    if (typeof LEADERBOARD_CONFIG === 'undefined') {
+        console.error("LEADERBOARD_CONFIG is not defined. Make sure leaderboard-client.js is loaded and initialized correctly.");
+        // 在提交按钮状态中显示错误
+        if(submissionStatusElement) submissionStatusElement.textContent = "排行榜客户端加载失败！";
+        // 禁用提交按钮
+        if(submitScoreButton) submitScoreButton.disabled = true;
+    } else {
+        try {
+            LEADERBOARD_CONFIG.baseUrl = 'https://game-service.huang.co';
+            LEADERBOARD_CONFIG.gameId = 'jump'; // 替换为你的游戏 ID
+            LEADERBOARD_CONFIG.apiKey = 'bZAaDP83ocTleVIxxSIPR6JT44oKFaeL'; // !! 替换为你的 API Key (注意安全风险) !!
+            console.log("Leaderboard client configured:", LEADERBOARD_CONFIG);
+        } catch (configError) {
+            console.error("Error configuring LEADERBOARD_CONFIG:", configError);
+            if(submissionStatusElement) submissionStatusElement.textContent = `配置排行榜时出错: ${configError.message}`;
+            if(submitScoreButton) submitScoreButton.disabled = true;
+        }
+    }
+    // --- 配置结束 ---
+
+    // 检查元素是否成功获取
+    // ... (element check remains the same)
+
+    // 添加按钮事件监听器
+    // ... (event listeners remain the same)
+
+    // 初始化时检测移动设备并进行相应调整 (移到这里确保 DOM Ready)
+    adjustForMobile();
+
+    // --- Start with Menu ---
+    initMenu();
+    console.log("Menu initialized. Waiting for player to start game..."); 
+
+    // 配置成功后，立即尝试获取排行榜数据（同时获取两种模式的）
+    if (typeof LEADERBOARD_CONFIG !== 'undefined' && LEADERBOARD_CONFIG.apiKey) {
+        fetchLeaderboard('challenge'); // 获取每日挑战排行榜
+        fetchLeaderboard('endless');  // 获取无尽模式排行榜
+    } else {
+        // 如果配置失败，标记排行榜状态为错误
+        leaderboardData.challenge = { status: 'error', rankings: [], error: '排行榜客户端配置失败' };
+        leaderboardData.endless = { status: 'error', rankings: [], error: '排行榜客户端配置失败' };
+    }
+});
+
+async function submitScore() {
+    console.log("[submitScore] Called.");
+    
+    // 确保元素已获取
+    if (!retrieveOverlayElements()) {
+        console.error("[submitScore] Cannot submit, elements could not be retrieved.");
+        if (submissionStatusElement) {
+            submissionStatusElement.textContent = '错误：无法访问界面元素！';
+        } else {
+            alert('错误：无法访问界面元素！'); 
+        }
+        return;
+    }
+    console.log("[submitScore] Overlay elements should be ready."); // <-- 新日志
+
+    const playerName = playerNameInput.value.trim();
+    console.log(`[submitScore] Player name entered: '${playerName}'`); // <-- 新日志
+    if (!playerName) {
+        submissionStatusElement.textContent = '请输入你的名字!';
+        console.log("[submitScore] Player name is empty."); // <-- 新日志
+        return;
+    }
+    if (playerName.length > 15) {
+        submissionStatusElement.textContent = '名字不能超过15个字符!';
+        console.log("[submitScore] Player name too long."); // <-- 新日志
+        return;
+    }
+
+    const finalScore = Math.floor(score / 100);
+    const gameModeId = currentGameMode === GAME_MODE.DAILY_CHALLENGE ? 'challenge' : 'endless';
+    console.log(`[submitScore] Calculated score: ${finalScore}, mode: ${gameModeId}`); // <-- 新日志
+    
+    console.log("[submitScore] Disabling inputs and setting status to '正在提交...'"); // <-- 新日志
+    submitScoreButton.disabled = true;
+    playerNameInput.disabled = true;
+    submissionStatusElement.textContent = '正在提交...';
+    console.log(`[submitScore] Status text set to: ${submissionStatusElement.textContent}`); // <-- 新日志
+
+    try {
+        console.log(`[submitScore] Inside try block. Preparing to call submitLeaderboardScore...`); // <-- 新日志
+        console.log(`--> Submitting: Name=${playerName}, Score=${finalScore}, Mode=${gameModeId}`);
+        
+        if (typeof LEADERBOARD_CONFIG === 'undefined' || !LEADERBOARD_CONFIG.apiKey) {
+            console.error("[submitScore] LEADERBOARD_CONFIG check failed."); // <-- 新日志
+            throw new Error("Leaderboard client not configured.");
+        }
+        if (typeof submitLeaderboardScore !== 'function') {
+            console.error("[submitScore] submitLeaderboardScore function check failed."); // <-- 新日志
+            throw new Error("submitLeaderboardScore function is not available.");
+        }
+        
+        console.log("[submitScore] Calling await submitLeaderboardScore..."); // <-- 新日志
+        const result = await submitLeaderboardScore(playerName, finalScore, gameModeId);
+        console.log("[submitScore] await submitLeaderboardScore finished. Result:", result); // <-- 新日志
+
+        console.log('--> 分数提交成功！记录 ID:', result.recordId);
+        submissionStatusElement.textContent = '分数提交成功!';
+        submitScoreButton.textContent = '已提交'; 
+        console.log("[submitScore] Success UI updated."); // <-- 新日志
+
+    } catch (error) {
+        console.error('[submitScore] Caught error:', error); // <-- 修改日志前缀
+        submissionStatusElement.textContent = `提交失败: ${error.message || '未知错误'}`;
+        submitScoreButton.disabled = false;
+        playerNameInput.disabled = false;
+        console.log("[submitScore] Failure UI updated."); // <-- 新日志
+    } 
+}
+
+// ===== 游戏结束逻辑修改 =====
+
+// 新增：显示分数提交界面的函数
+function showScoreSubmissionOverlay() {
+    console.log("[showScoreSubmissionOverlay] Called (Now resets state).");
+    // 使用上次提交的名字作为默认值
+    gameOverPlayerName = lastSubmittedName || '';
+    submissionStatusMessage = '';
+    isSubmitting = false; // 重置提交状态
+    isNameInputActive = false; // 重置输入框激活状态
+}
+
+// 新增：隐藏分数提交界面的函数
+function hideScoreSubmissionOverlay() {
+    console.log("[hideScoreSubmissionOverlay] Called.");
+    // 尝试获取元素（如果还没获取的话），但不强制报错，因为可能只是菜单初始化时调用
+    retrieveOverlayElements(); 
+    
+    if (scoreSubmissionOverlay) { // 检查元素是否存在再操作
+        console.log(`[hideScoreSubmissionOverlay] scoreSubmissionOverlay display before: ${scoreSubmissionOverlay.style.display}`);
+        scoreSubmissionOverlay.style.display = 'none';
+        console.log(`[hideScoreSubmissionOverlay] scoreSubmissionOverlay display after: ${scoreSubmissionOverlay.style.display}`);
+    } else {
+        console.warn("[hideScoreSubmissionOverlay] scoreSubmissionOverlay element not found or not retrieved yet.");
+    }
+}
+
+// --- 新增：获取并初始化 Overlay 元素的函数 ---
+function retrieveOverlayElements() {
+    if (overlayElementsRetrieved) return true; // 已经获取过
+
+    console.log("[retrieveOverlayElements] Attempting to get elements...");
+    scoreSubmissionOverlay = document.getElementById('score-submission-overlay');
+    finalScoreElement = document.getElementById('final-score');
+    playerNameInput = document.getElementById('playerName');
+    submitScoreButton = document.getElementById('submitScoreButton');
+    restartGameButton = document.getElementById('restartGameButton');
+    backToMenuButton = document.getElementById('backToMenuButton');
+    submissionStatusElement = document.getElementById('submission-status');
+
+    // 检查关键元素是否都找到了
+    if (scoreSubmissionOverlay && finalScoreElement && playerNameInput && submitScoreButton && restartGameButton && backToMenuButton && submissionStatusElement) {
+        console.log("[retrieveOverlayElements] Elements successfully retrieved.");
+        overlayElementsRetrieved = true;
+        
+        // 在这里添加事件监听器，因为现在保证元素存在
+        console.log("[retrieveOverlayElements] Adding event listeners to overlay buttons.");
+        
+        // 修改：为 submitScoreButton 的监听器添加直接日志
+        submitScoreButton.addEventListener('click', () => {
+            console.log("[Submit Button Listener] Click detected!"); 
+            console.log(`[Submit Button Listener] Checking submitScore: type is ${typeof submitScore}`); // <-- 检查类型
+            try {
+                console.log("[Submit Button Listener] Logging target message directly..."); // 新增日志
+                console.log("[submitScore] Called."); // <-- 直接在这里打印目标日志
+                console.log("[Submit Button Listener] Direct log successful. Now calling submitScore..."); // 新增日志
+                submitScore(); // 调用原始的 submitScore 函数
+            } catch (error) {
+                console.error("[Submit Button Listener] Error during direct log or calling submitScore:", error); // 修改错误日志
+                 // 尝试更新状态显示错误
+                 if (submissionStatusElement) {
+                     submissionStatusElement.textContent = `调用提交函数时出错: ${error.message}`;
+                 } else {
+                    alert(`调用提交函数时出错: ${error.message}`);
+                 }
+            }
+        });
+        
+        restartGameButton.addEventListener('click', () => {
+            console.log("[Restart Button Listener] Click detected!"); // <-- 添加日志
+            hideScoreSubmissionOverlay();
+            init(); // 重新开始游戏
+        });
+        backToMenuButton.addEventListener('click', () => {
+            console.log("[Back To Menu Button Listener] Click detected!"); // <-- 添加日志
+            hideScoreSubmissionOverlay();
+            initMenu(); // 回到主菜单
+        });
+        return true;
+    } else {
+        console.error("[retrieveOverlayElements] Failed to get one or more required HTML elements for the overlay.");
+        // Log which elements were not found (optional debugging)
+        if (!scoreSubmissionOverlay) console.error("scoreSubmissionOverlay not found");
+        if (!finalScoreElement) console.error("finalScoreElement not found");
+        if (!playerNameInput) console.error("playerNameInput not found");
+        // ... etc for other elements
+        overlayElementsRetrieved = false; // 标记为未成功
+        return false;
+    }
+}
+
+// --- 添加键盘事件监听器 ---
+window.addEventListener('keydown', (e) => {
+    // 只在游戏结束界面且未提交成功时处理输入
+    if ((gameState !== 'gameover' && gameState !== 'challengeComplete') || 
+        submissionStatusMessage === '分数提交成功!' ||
+        !isNameInputActive) { // 新增：检查输入框是否激活
+        return;
+    }
+
+    const key = e.key;
+
+    // 处理退格键
+    if (key === 'Backspace') {
+        e.preventDefault(); // 防止浏览器后退
+        if (gameOverPlayerName.length > 0) {
+           gameOverPlayerName = gameOverPlayerName.slice(0, -1);
+        }
+    } 
+    // 处理回车键 (触发提交)
+    else if (key === 'Enter') {
+         e.preventDefault(); 
+         if (!isSubmitting) { // 防止重复触发
+             console.log("[Keydown] Enter pressed, attempting submitScore.");
+             submitScore();
+         }
+    }
+    // 处理可打印字符
+    else if (key.length === 1 && gameOverPlayerName.length < MAX_NAME_LENGTH && !e.ctrlKey && !e.metaKey) {
+        // 可以添加更严格的字符过滤，例如只允许字母数字
+        gameOverPlayerName += key;
+    }
+});
+
+// 修改：showScoreSubmissionOverlay 函数，使用上次提交的名字作为默认值，但不激活输入框
+function showScoreSubmissionOverlay() {
+    console.log("[showScoreSubmissionOverlay] Called (Now resets state).");
+    // 使用上次提交的名字作为默认值
+    gameOverPlayerName = lastSubmittedName || '';
+    submissionStatusMessage = '';
+    isSubmitting = false; // 重置提交状态
+    isNameInputActive = false; // 重置输入框激活状态
+}
+
+// 修改：hideScoreSubmissionOverlay 现在只重置状态
+function hideScoreSubmissionOverlay() {
+    console.log("[hideScoreSubmissionOverlay] Called (Now resets state).");
+     gameOverPlayerName = '';
+     submissionStatusMessage = '';
+     isSubmitting = false;
+}
+
+// 修改：提交分数的函数，成功后保存用户名
+async function submitScore() {
+    console.log("[submitScore] Called.");
+    if (isSubmitting) { // 防止重复提交
+        console.log("[submitScore] Already submitting, ignored.");
+        return;
+    }
+
+    // 从全局变量获取名字
+    const playerName = gameOverPlayerName.trim(); 
+    console.log(`[submitScore] Player name from global: '${playerName}'`);
+    if (!playerName) {
+        submissionStatusMessage = '请输入你的名字!'; 
+        console.log("[submitScore] Player name is empty.");
+        return;
+    }
+    if (playerName.length > 15) {
+        submissionStatusMessage = '名字不能超过15个字符!';
+        console.log("[submitScore] Player name too long.");
+        return;
+    }
+
+    const finalScore = Math.floor(score / 100);
+    const gameModeId = currentGameMode === GAME_MODE.DAILY_CHALLENGE ? 'challenge' : 'endless';
+    console.log(`[submitScore] Calculated score: ${finalScore}, mode: ${gameModeId}`);
+    
+    // 更新状态变量
+    console.log("[submitScore] Setting status to '正在提交...'");
+    isSubmitting = true; // 设置提交中标志
+    submissionStatusMessage = '正在提交...';
+
+    try {
+        console.log(`[submitScore] Inside try block. Preparing to call submitLeaderboardScore...`); 
+        console.log(`--> Submitting: Name=${playerName}, Score=${finalScore}, Mode=${gameModeId}`);
+        if (typeof LEADERBOARD_CONFIG === 'undefined' || !LEADERBOARD_CONFIG.apiKey) {
+            throw new Error("Leaderboard client not configured.");
+        }
+        if (typeof submitLeaderboardScore !== 'function') {
+            throw new Error("submitLeaderboardScore function is not available.");
+        }
+        console.log("[submitScore] Calling await submitLeaderboardScore..."); 
+        const result = await submitLeaderboardScore(playerName, finalScore, gameModeId);
+        console.log("[submitScore] await submitLeaderboardScore finished. Result:", result); 
+
+        console.log('--> 分数提交成功！记录 ID:', result.recordId);
+        submissionStatusMessage = '分数提交成功!';
+        
+        // 保存成功提交的名字
+        lastSubmittedName = playerName;
+        try {
+            localStorage.setItem('jumpGamePlayerName', playerName);
+            console.log(`[submitScore] 已保存玩家名字到localStorage: ${playerName}`);
+        } catch (e) {
+            console.error("[submitScore] 保存名字到localStorage时出错:", e);
+        }
+        
+        // 提交成功后，刷新当前模式的排行榜
+        setTimeout(() => {
+            console.log(`[submitScore] 提交成功，刷新${gameModeId}模式排行榜...`);
+            fetchLeaderboard(gameModeId);
+        }, 500); // 延迟500毫秒再刷新，确保服务器数据已更新
+        
+        console.log("[submitScore] Success status updated.");
+        // 成功后保持 isSubmitting = true; 防止再次提交或修改名字
+
+    } catch (error) {
+        console.error('[submitScore] Caught error:', error);
+        submissionStatusMessage = `提交失败: ${error.message || '未知错误'}`;
+        isSubmitting = false; // 允许重试
+        console.log("[submitScore] Failure status updated.");
+    } 
+}
+
+// --- 新增：获取每日排行榜数据的函数 ---
+async function fetchDailyLeaderboard() {
+    if (dailyLeaderboardData.status === 'loading') return; // 防止重复加载
+
+    console.log("[fetchDailyLeaderboard] Attempting to fetch...");
+    dailyLeaderboardData = { status: 'loading', rankings: [], error: null };
+
+    const options = {
+        limit: 5, // 获取前 5 名
+        offset: 0,
+        period: 'daily' // 获取每日排行
+    };
+
+    try {
+        // 确保 leaderboard 客户端已配置且函数可用
+        if (typeof LEADERBOARD_CONFIG === 'undefined' || !LEADERBOARD_CONFIG.apiKey) {
+            throw new Error("Leaderboard client not configured.");
+        }
+        if (typeof getLeaderboardRankings !== 'function') {
+            throw new Error("getLeaderboardRankings function is not available.");
+        }
+
+        console.log(`[fetchDailyLeaderboard] Calling getLeaderboardRankings for mode 'challenge' with options:`, options);
+        const leaderboardData = await getLeaderboardRankings('challenge', options);
+        console.log("[fetchDailyLeaderboard] Data received:", leaderboardData);
+        
+        dailyLeaderboardData = {
+            status: 'loaded',
+            rankings: leaderboardData.rankings || [],
+            error: null
+        };
+        console.log("[fetchDailyLeaderboard] Leaderboard data stored successfully.");
+
+    } catch (error) {
+        console.error("[fetchDailyLeaderboard] Failed to fetch leaderboard:", error);
+        dailyLeaderboardData = {
+            status: 'error',
+            rankings: [],
+            error: error.message || '加载排行榜失败'
+        };
+    }
+    // 注意：获取数据后，如果当前正显示结束界面，需要手动触发重绘才能看到更新
+    // 这个逻辑可以加在 gameLoop 或者在 fetch 成功后检查 gameState
+    if (gameState === 'gameover' || gameState === 'challengeComplete') {
+        // requestAnimationFrame(gameLoop); // Or simply let the existing loop handle it if it's still running somehow?
+        // Since the loop continues in gameover/challengeComplete, it should redraw automatically.
+    }
+}
+
+// --- 新增：获取排行榜数据的函数 (支持不同模式) ---
+async function fetchLeaderboard(mode = null) {
+    // 如果未指定模式，使用当前游戏模式
+    const gameModeId = mode || (currentGameMode === GAME_MODE.DAILY_CHALLENGE ? 'challenge' : 'endless');
+    
+    if (leaderboardData[gameModeId].status === 'loading') return; // 防止重复加载
+
+    console.log(`[fetchLeaderboard] 正在获取 ${gameModeId} 模式排行榜...`);
+    leaderboardData[gameModeId] = { 
+        status: 'loading', 
+        rankings: [], 
+        error: null 
+    };
+
+    // 获取前20名数据，用于显示和判断资格
+    const options = {
+        limit: 20, // 获取前20名
+        offset: 0,
+        period: gameModeId === 'challenge' ? 'daily' : 'all' // 挑战模式用daily，无尽模式用all
+    };
+
+    try {
+        // 确保 leaderboard 客户端已配置且函数可用
+        if (typeof LEADERBOARD_CONFIG === 'undefined' || !LEADERBOARD_CONFIG.apiKey) {
+            throw new Error("排行榜客户端未配置");
+        }
+        if (typeof getLeaderboardRankings !== 'function') {
+            throw new Error("getLeaderboardRankings函数不可用");
+        }
+
+        // 获取前20名数据
+        console.log(`[fetchLeaderboard] 调用getLeaderboardRankings获取${gameModeId}模式前20名排行榜`);
+        const rankingsData = await getLeaderboardRankings(gameModeId, options);
+        
+        console.log(`[fetchLeaderboard] ${gameModeId}排行榜数据接收成功，共${rankingsData.rankings ? rankingsData.rankings.length : 0}条记录`);
+        
+        leaderboardData[gameModeId] = {
+            status: 'loaded',
+            rankings: rankingsData.rankings || [],
+            error: null
+        };
+        console.log(`[fetchLeaderboard] ${gameModeId}排行榜数据存储成功`);
+
+    } catch (error) {
+        console.error(`[fetchLeaderboard] 获取${gameModeId}排行榜失败:`, error);
+        leaderboardData[gameModeId] = {
+            status: 'error',
+            rankings: [],
+            error: error.message || '加载排行榜失败'
+        };
+    }
+}
+
+// 新增：检查分数是否可能进入排行榜前20名
+async function checkLeaderboardEligibility(score, gameModeId) {
+    console.log(`[checkLeaderboardEligibility] 检查分数 ${score} 是否能进入${gameModeId}排行榜前20名`);
+    canSubmitScore = false; // 默认不能提交
+    
+    try {
+        // 确保排行榜客户端已配置
+        if (typeof LEADERBOARD_CONFIG === 'undefined' || !LEADERBOARD_CONFIG.apiKey) {
+            throw new Error("排行榜客户端未配置");
+        }
+        if (typeof getLeaderboardRankings !== 'function') {
+            throw new Error("getLeaderboardRankings函数不可用");
+        }
+        
+        // 获取排行榜前20名数据
+        const options = {
+            limit: 20,
+            offset: 0,
+            period: gameModeId === 'challenge' ? 'daily' : 'all'
+        };
+        
+        console.log(`[checkLeaderboardEligibility] 获取${gameModeId}排行榜前20名数据...`);
+        const rankingsData = await getLeaderboardRankings(gameModeId, options);
+        
+        if (!rankingsData || !rankingsData.rankings) {
+            throw new Error("获取排行榜数据失败");
+        }
+        
+        // 检查是否有资格进入排行榜
+        const rankings = rankingsData.rankings;
+        if (rankings.length < 20) {
+            // 排行榜不满20条，可以提交
+            console.log(`[checkLeaderboardEligibility] 排行榜数据不足20条(${rankings.length}条)，可以提交`);
+            canSubmitScore = true;
+        } else {
+            // 检查分数是否高于排行榜第20名
+            const lowestScore = rankings[rankings.length - 1].score;
+            canSubmitScore = score > lowestScore;
+            console.log(`[checkLeaderboardEligibility] 当前分数: ${score}, 排行榜第20名: ${lowestScore}, 可以提交: ${canSubmitScore}`);
+        }
+    } catch (error) {
+        console.error(`[checkLeaderboardEligibility] 检查排行榜资格时出错:`, error);
+        // 如果出错，默认允许提交(避免因网络问题等阻止用户提交)
+        canSubmitScore = true;
+        console.log(`[checkLeaderboardEligibility] 发生错误，默认允许提交`);
+    }
+}
+
+// 新增：使用缓存的排行榜数据检查分数是否可能进入前20名
+function checkLeaderboardEligibilityFromCache(score, gameModeId) {
+    console.log(`[checkLeaderboardEligibilityFromCache] 检查分数 ${score} 是否能进入${gameModeId}排行榜前20名`);
+    canSubmitScore = false; // 默认不能提交
+    
+    // 检查缓存数据状态
+    if (leaderboardData[gameModeId].status !== 'loaded' || !leaderboardData[gameModeId].rankings || leaderboardData[gameModeId].rankings.length === 0) {
+        console.log(`[checkLeaderboardEligibilityFromCache] 没有有效的缓存排行榜数据，默认允许提交`);
+        canSubmitScore = true;
+        return;
+    }
+    
+    // 使用缓存的排行榜数据判断
+    const rankings = leaderboardData[gameModeId].rankings;
+    
+    if (rankings.length < 20) {
+        // 排行榜不满20条，可以提交
+        console.log(`[checkLeaderboardEligibilityFromCache] 排行榜数据不足20条(${rankings.length}条)，可以提交`);
+        canSubmitScore = true;
+    } else {
+        // 检查分数是否高于排行榜第20名
+        const lowestScore = rankings[rankings.length - 1].score;
+        canSubmitScore = score > lowestScore;
+        console.log(`[checkLeaderboardEligibilityFromCache] 当前分数: ${score}, 排行榜第20名: ${lowestScore}, 可以提交: ${canSubmitScore}`);
+    }
 }

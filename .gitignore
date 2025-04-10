@@ -1,0 +1,16 @@
+# 忽略所有以点开头的文件和目录
+.*
+
+# 不忽略.gitignore文件本身
+!.gitignore
+
+# 其他常见需要忽略的文件/目录
+node_modules/
+npm-debug.log
+yarn-error.log
+.DS_Store
+
+# 构建输出目录
+/dist
+/build 
+.vercel
