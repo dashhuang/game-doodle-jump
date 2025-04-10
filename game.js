@@ -2986,6 +2986,9 @@ canvas.addEventListener('click', (e) => {
             if (isInsideInputBox) {
                 console.log("[Click] Clicked on name input box.");
                 isNameInputActive = true; // 激活输入框
+                
+                // 在所有设备上创建一个临时输入框以支持键盘输入
+                createTemporaryInputField();
             } else if (gameOverButtons.submit && isInsideButton(clickX, clickY, gameOverButtons.submit)) {
                 if (!isSubmitting) { 
                     console.log("Clicked Submit Score button on Canvas.");
@@ -3070,6 +3073,11 @@ canvas.addEventListener('touchend', (e) => {
             if (isInsideInputBox) {
                 console.log("[Touchend] Touched on name input box.");
                 isNameInputActive = true; // 激活输入框
+                
+                // 在移动设备上创建一个临时的真实HTML输入框来触发虚拟键盘
+                if (isMobile) {
+                    createTemporaryInputField();
+                }
             } else if (gameOverButtons.submit && isInsideButton(touchX, touchY, gameOverButtons.submit)) {
                 if (!isSubmitting) {
                     console.log("Touched Submit Score button on Canvas.");
@@ -3856,3 +3864,139 @@ function checkLeaderboardEligibilityFromCache(score, gameModeId) {
         console.log(`[checkLeaderboardEligibilityFromCache] 当前分数: ${score}, 排行榜第20名: ${lowestScore}, 可以提交: ${canSubmitScore}`);
     }
 }
+
+// --- 新增：创建临时HTML输入框以触发移动设备虚拟键盘 ---
+function createTemporaryInputForMobile() {
+    console.log("[createTemporaryInputForMobile] Creating temporary input for mobile keyboard");
+    
+    // 检查是否已经存在临时输入框，如果有，先移除
+    const existingInput = document.getElementById('temp-mobile-input');
+    if (existingInput) {
+        document.body.removeChild(existingInput);
+    }
+
+    // 创建一个临时输入框
+    const tempInput = document.createElement('input');
+    tempInput.id = 'temp-mobile-input';
+    tempInput.type = 'text';
+    tempInput.value = gameOverPlayerName; // 使用当前名字作为初始值
+    tempInput.maxLength = MAX_NAME_LENGTH;
+    
+    // 设置样式：将输入框放在屏幕中的可见位置，但不遮挡游戏界面
+    tempInput.style.position = 'fixed';
+    tempInput.style.bottom = '0';
+    tempInput.style.left = '0';
+    tempInput.style.width = '100%';
+    tempInput.style.padding = '10px';
+    tempInput.style.boxSizing = 'border-box';
+    tempInput.style.backgroundColor = 'rgba(255, 255, 255, 0.9)';
+    tempInput.style.border = '1px solid #ccc';
+    tempInput.style.borderRadius = '5px';
+    tempInput.style.fontSize = '16px'; // 确保iOS上不会缩放
+    tempInput.style.zIndex = '1000'; // 确保在最上层
+    
+    // 监听输入变化，更新gameOverPlayerName
+    tempInput.addEventListener('input', function() {
+        gameOverPlayerName = this.value.substring(0, MAX_NAME_LENGTH);
+    });
+    
+    // 处理提交
+    tempInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            this.blur(); // 隐藏键盘
+            
+            // 点击提交按钮（如果可用）
+            if (!isSubmitting) {
+                submitScore();
+            }
+        }
+    });
+    
+    // 失焦时移除输入框
+    tempInput.addEventListener('blur', function() {
+        // 延迟移除，避免在某些情况下立即失去焦点
+        setTimeout(() => {
+            if (document.body.contains(this)) {
+                document.body.removeChild(this);
+            }
+        }, 300);
+    });
+    
+    // 添加到文档
+    document.body.appendChild(tempInput);
+    
+    // 获取焦点以触发虚拟键盘
+    setTimeout(() => {
+        tempInput.focus();
+    }, 100);
+}
+
+// --- 新增：创建临时HTML输入框以触发键盘输入 ---
+function createTemporaryInputField() {
+    console.log("[createTemporaryInputField] Creating temporary input field for keyboard input");
+    
+    // 检查是否已经存在临时输入框，如果有，先移除
+    const existingInput = document.getElementById('temp-mobile-input');
+    if (existingInput) {
+        document.body.removeChild(existingInput);
+    }
+
+    // 创建一个临时输入框
+    const tempInput = document.createElement('input');
+    tempInput.id = 'temp-mobile-input';
+    tempInput.type = 'text';
+    tempInput.value = gameOverPlayerName; // 使用当前名字作为初始值
+    tempInput.maxLength = MAX_NAME_LENGTH;
+    
+    // 设置样式：将输入框放在屏幕中的可见位置，但不遮挡游戏界面
+    tempInput.style.position = 'fixed';
+    tempInput.style.bottom = '0';
+    tempInput.style.left = '0';
+    tempInput.style.width = '100%';
+    tempInput.style.padding = '10px';
+    tempInput.style.boxSizing = 'border-box';
+    tempInput.style.backgroundColor = 'rgba(255, 255, 255, 0.9)';
+    tempInput.style.border = '1px solid #ccc';
+    tempInput.style.borderRadius = '5px';
+    tempInput.style.fontSize = '16px'; // 确保iOS上不会缩放
+    tempInput.style.zIndex = '1000'; // 确保在最上层
+    
+    // 监听输入变化，更新gameOverPlayerName
+    tempInput.addEventListener('input', function() {
+        gameOverPlayerName = this.value.substring(0, MAX_NAME_LENGTH);
+    });
+    
+    // 处理提交
+    tempInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            this.blur(); // 隐藏键盘
+            
+            // 点击提交按钮（如果可用）
+            if (!isSubmitting) {
+                submitScore();
+            }
+        }
+    });
+    
+    // 失焦时移除输入框
+    tempInput.addEventListener('blur', function() {
+        // 延迟移除，避免在某些情况下立即失去焦点
+        setTimeout(() => {
+            if (document.body.contains(this)) {
+                document.body.removeChild(this);
+            }
+        }, 300);
+    });
+    
+    // 添加到文档
+    document.body.appendChild(tempInput);
+    
+    // 获取焦点以触发虚拟键盘
+    setTimeout(() => {
+        tempInput.focus();
+    }, 100);
+}
+
+// --- 添加键盘事件监听器 ---
